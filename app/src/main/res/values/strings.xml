@@ -1,0 +1,205 @@
+
+<resources>
+    <string name="app_name">My Application</string>
+    <string name="aktualisieren_beschreibung">Ansicht aktualisieren</string>
+    <string name="aktualisieren_startet">Ansicht wird aktualisiert.</string>
+    <string name="artikel_suche_hint">IdentNr, Bezeichnung oder Lagerort suchen</string>
+    <string name="artikel_bearbeitung_gesperrt_titel">BlattNr abgeschlossen</string>
+    <string name="artikel_bearbeitung_gesperrt_text">Diese BlattNr ist bereits abgeschlossen und kann hier nicht weiter bearbeitet werden.</string>
+    <string name="artikel_bearbeitung_gesperrt_hinweis">Abgeschlossene BlattNr – Bearbeitung gesperrt.</string>
+    <string name="zaehlmenge_ungueltig">Bitte nur ganze Zahlen ab 0 als Zählmenge eingeben.</string>
+    <string name="abschluss_offene_artikel_text">Es sind noch %1$d Artikel ohne Zählmenge vorhanden. Trotzdem abschließen?</string>
+    <string name="abschluss_sync_offen_text">Es gibt noch offene lokale Änderungen. Die BlattNr kann abgeschlossen werden, die Übertragung läuft später weiter.</string>
+    <string name="abschluss_offene_und_sync_text">Es sind noch %1$d Artikel ohne Zählmenge vorhanden und es gibt offene lokale Änderungen. Trotzdem abschließen?</string>
+
+    <string name="login_titel">Zähler Login</string>
+    <string name="login_untertitel">Melde dich mit deinem Namen an, bevor du Zählerlisten bearbeitest.</string>
+    <string name="login_zaehler_label">Zählername</string>
+    <string name="login_beispielname">Max Mustermann</string>
+    <string name="login_button">Login</string>
+    <string name="login_zaehler_fehlt">Bitte zuerst den Zählernamen eingeben.</string>
+    <string name="login_fussnote">Lokale Demo ohne Serververbindung.</string>
+    <string name="login_fussnote_zeile_eins">Lokale Demo ohne Serververbindung.</string>
+    <string name="login_fussnote_zeile_zwei">Lokale Demo ohne Serververbindung.</string>
+    <string name="login_logo_inventur">Inventur</string>
+    <string name="login_logo_demo">Demo</string>
+
+    <string name="hauptmenue_titel">Hauptmenü</string>
+    <string name="hauptmenue_untertitel">Hier siehst du sofort, welche Zählerlisten aktuell fällig sind und welche später anstehen.</string>
+    <string name="hauptmenue_untertitel_mit_zaehler">Angemeldet als %1$s. Hier siehst du sofort, welche Zählerlisten aktuell fällig sind und welche später anstehen.</string>
+    <string name="hauptmenue_popup_hilfe">Hilfe</string>
+    <string name="hauptmenue_popup_datenbank">Datenbank</string>
+    <string name="hauptmenue_popup_fehlermeldung">Fehlermeldung</string>
+    <string name="hilfe_dialog_titel">Hilfe</string>
+    <string name="hilfe_dialog_leer">In der lokalen Demo sind keine echten Supportkontakte hinterlegt.</string>
+    <string name="hilfe_dialog_kontakte">Lokale Inventur-Demo: keine echten Ansprechpartner oder Telefonnummern.</string>
+    <string name="datenbank_pruefung_startet">Datenbankprüfung wird gestartet.</string>
+    <string name="datenbank_pruefung_erfolgreich">Datenbankprüfung erfolgreich.</string>
+
+    <string name="faellige_zaehlerlisten_titel">Fällige Zählerlisten</string>
+    <string name="faellige_zaehlerlisten_untertitel">Diese Listen sollten als nächstes bearbeitet werden.</string>
+    <string name="nicht_faellige_zaehlerlisten_titel">Weitere Zählerlisten</string>
+    <string name="nicht_faellige_zaehlerlisten_untertitel">Diese Listen sind aktuell nicht fällig und bleiben deshalb darunter einsortiert.</string>
+
+    <string name="zaehlerlisten_titel">Zählerlisten</string>
+    <string name="zaehlerlisten_untertitel">Wähle die Zählerliste aus, die für den Bereich aktuell gezählt werden soll.</string>
+    <string name="zaehlerlisten_detail_titel">Zählerliste %1$s</string>
+    <string name="zaehlerlisten_detail_untertitel">Hier siehst du die BlattNr der in main ausgewählten Zählerliste.</string>
+    <string name="zaehlerlisten_blattnummer_titel">BlattNr: %1$s</string>
+    <string name="zaehlerlisten_detail_liste_prefix">Zählerliste: %1$s</string>
+    <string name="blattlisten_version_dialog_titel">Blattliste öffnen</string>
+    <string name="blattlisten_version_dialog_text">Welche Version soll geöffnet werden?\n1 = Original\n2 = Zweite Version</string>
+    <string name="blattlisten_version_original">1 Original</string>
+    <string name="blattlisten_version_zweite">2 Zweite Version</string>
+
+    <string name="artikeluebersicht_titel">Artikelübersicht</string>
+    <string name="artikeluebersicht_untertitel">Erfasse die Zählmengen direkt in dieser Liste.</string>
+    <string name="artikeluebersicht_bereich_prefix">Bereich: %1$s</string>
+    <string name="artikeluebersicht_blattnummer_prefix">BlattNr: %1$s</string>
+    <string name="artikeluebersicht_fortschritt_prefix">Fortschritt: %1$d von %2$d</string>
+    <string name="artikeluebersicht_letzte_zaehlung_prefix">Letzte Zählung: %1$s</string>
+    <string name="artikeluebersicht_letzte_zaehlung_standard">Letzte Zählung: unbekannt</string>
+    <string name="stichtag_label">Stichtag</string>
+    <string name="stichtag_wert">%1$s</string>
+    <string name="positionsnummer_label">Pos</string>
+    <string name="identnummer_label">IdentNr</string>
+    <string name="lagerort_label">Lagerort</string>
+    <string name="zaehlstatus_label">Status</string>
+    <string name="zaehlstatus_offen">Offen</string>
+    <string name="zaehlstatus_gezaehlt">Gezählt</string>
+    <string name="vorheriges_blatt_beschreibung">Vorheriges Blatt</string>
+    <string name="naechstes_blatt_beschreibung">Nächstes Blatt</string>
+    <string name="kein_vorheriges_blatt">Kein vorheriges Blatt vorhanden.</string>
+    <string name="kein_naechstes_blatt">Kein nächstes Blatt vorhanden.</string>
+    <string name="blattwechsel_nicht_moeglich">Blattwechsel aktuell nicht möglich.</string>
+
+    <string name="artikelnummer_label">Artikelnummer</string>
+    <string name="artikel_liste_titel">Artikel in dieser Zählerliste</string>
+    <string name="artikel_liste_untertitel">Arbeite die Positionen direkt in der Reihenfolge der Zählerliste ab.</string>
+    <string name="artikel_liste_untertitel_ungespeichert">Änderungen erkannt. Speichern läuft automatisch.</string>
+    <string name="artikel_v2_offen_badge">offen</string>
+    <string name="artikel_v2_lagerort_wert">Lagerort: %1$s</string>
+    <string name="artikel_v2_letzte_zaehlmenge_wert">Letzte Zählmenge: %1$s</string>
+    <string name="artikel_detail_titel">Artikel</string>
+    <string name="artikel_detail_untertitel">Pos %1$d | IdentNr %2$s</string>
+    <string name="artikel_detail_minus">-</string>
+    <string name="artikel_detail_plus">+</string>
+    <string name="artikel_tabellenkopf_position">Pos</string>
+    <string name="artikel_tabellenkopf_ident">IdentNr</string>
+    <string name="artikel_tabellenkopf_anmerkung">Anm.</string>
+    <string name="artikel_tabellenkopf_letzte_zaehlmenge">Letzte</string>
+    <string name="artikel_tabellenkopf_lagerort">Lagerort</string>
+    <string name="artikel_tabellenkopf_ist">Ist</string>
+    <string name="artikel_tabellenkopf_min">Min</string>
+    <string name="artikel_tabellenkopf_zaehl">Zähl</string>
+
+    <string name="bezeichnung_label">Bezeichnung</string>
+    <string name="blattnummer_label">BlattNr</string>
+    <string name="bereich_label">Bereich</string>
+
+    <string name="bottom_nav_start">Start</string>
+    <string name="bottom_nav_listen">Listen</string>
+    <string name="bottom_nav_profil">Profil</string>
+
+    <string name="filter_alle">Alle</string>
+    <string name="filter_alle_aktiv">Filter: alle Artikel</string>
+    <string name="filter_gezaehlt">Schon gezählt</string>
+    <string name="filter_gezaehlt_aktiv">Filter: gezählte Artikel</string>
+    <string name="filter_symbol_beschreibung">Filter öffnen</string>
+    <string name="filter_ungezaehlt">Noch nicht gezählt</string>
+    <string name="filter_ungezaehlt_aktiv">Filter: offene Artikel</string>
+    <string name="filter_unter_mindestbestand">Unter Mindestbestand</string>
+    <string name="filter_unter_mindestbestand_aktiv">Filter: unter Mindestbestand</string>
+
+    <string name="fortschritt_label">Fortschritt</string>
+    <string name="ist_menge_label">Ist-Menge</string>
+    <string name="leere_artikelliste_hinweis">Keine Artikel für diese Auswahl vorhanden.</string>
+    <string name="letzte_zaehlung_label">Letzte Zählung</string>
+    <string name="letzte_zaehlmenge_label">Letzte Zählmenge</string>
+
+    <string name="schreiber_fehlt">Bitte zuerst den Schreiber eintragen.</string>
+    <string name="schreiber_label">Schreiber</string>
+    <string name="schreiber_vertretung_beschreibung">Schreiber ändern</string>
+    <string name="schreiber_vertretung_titel">Schreiber vertreten</string>
+    <string name="schreiber_vertretung_hinweis">Wer vertritt den Schreiber?</string>
+    <string name="schreiber_vertretung_hint">Name des Vertreters</string>
+
+    <string name="zaehl_menge_label">Zähl-Menge</string>
+    <string name="zaehl_menge_hint">Menge eingeben</string>
+    <string name="anmerkung_button">Anmerkung</string>
+    <string name="anmerkung_button_gesetzt">Anm. ok</string>
+    <string name="anmerkung_dialog_titel">Anmerkung</string>
+    <string name="anmerkung_dialog_speichern">Speichern</string>
+    <string name="anmerkung_dialog_abbrechen">Abbrechen</string>
+    <string name="anmerkung_hint">Was soll hier stehen?</string>
+
+    <string name="artikel_icon_cube">[]</string>
+    <string name="list_icon_clipboard">[]</string>
+
+    <string name="mindestbestand_label">Mindestbestand</string>
+    <string name="mindestbestand_kurz_label">Mindestbestand</string>
+
+    <string name="zaehlmengen_speichern">Zählmengen speichern</string>
+    <string name="autosave_status_aktiv">Automatisch speichern ist aktiv</string>
+    <string name="autosave_status_wartet">Änderungen erkannt – wird automatisch gespeichert.</string>
+    <string name="autosave_status_speichert">Speichert gerade...</string>
+    <string name="autosave_status_gespeichert">Alles gespeichert</string>
+    <string name="autosave_status_kein_netzwerk">Offline – lokal weiterarbeiten.</string>
+    <string name="autosave_status_lokal">Lokal gespeichert – Übertragung offen.</string>
+    <string name="zaehlerliste_status_faellig">Fällig</string>
+    <string name="zaehlerliste_status_nicht_faellig">Nicht fällig</string>
+    <string name="zaehlerliste_status_abgeschlossen">Abgeschlossen</string>
+
+    <string name="zaehler_fehlt">Bitte zuerst den Zähler eintragen.</string>
+    <string name="zaehler_label">Zähler</string>
+    <string name="zaehler_vertretung_beschreibung">Zähler ändern</string>
+    <string name="zaehler_vertretung_titel">Zähler vertreten</string>
+    <string name="zaehler_vertretung_hinweis">Wer vertritt den Zähler?</string>
+    <string name="zaehler_vertretung_hint">Name des Vertreters</string>
+    <string name="vertretung_dialog_uebernehmen">Übernehmen</string>
+    <string name="vertretung_dialog_abbrechen">Abbrechen</string>
+
+    <string name="speichern_erfolgreich">Speichern erfolgreich</string>
+    <string name="speichern_fehler">Speichern fehlgeschlagen</string>
+    <string name="testmodus_hinweis">Testmodus aktiv: Mock-Daten statt API/SQL</string>
+    <string name="sync_status_erfolgreich">Alles übertragen</string>
+    <string name="sync_status_offen">Lokal gespeichert – Übertragung offen.</string>
+    <string name="sync_status_kein_netzwerk">Offline – lokal gespeichert.</string>
+    <string name="sync_status_kein_netzwerk_detail">Das Tablet hat aktuell keine Netzwerkverbindung. Die App arbeitet mit den lokal gespeicherten Daten weiter und versucht die Synchronisierung erst wieder bei vorhandener Verbindung.</string>
+    <string name="sync_status_info_beschreibung">Synchronisierungsdetails anzeigen</string>
+    <string name="sync_status_dialog_titel">Synchronisierung offen</string>
+    <string name="sync_status_kein_offener_sync_detail">Alle lokal gespeicherten Daten wurden bereits an den SQL-Server übertragen.</string>
+    <string name="sync_hauptmenue_blockiert_titel">Hauptmenü noch gesperrt</string>
+    <string name="sync_hauptmenue_blockiert_offline_text">Für diese Zählerliste gibt es noch lokal gespeicherte Änderungen. Solange die Übertragung offen ist, kannst du nicht zurück ins Hauptmenü. Prüfe die Verbindung und versuche die Synchronisierung erneut.</string>
+    <string name="sync_hauptmenue_blockiert_offen_text">Für diese Zählerliste gibt es noch lokal gespeicherte Änderungen. Solange die Übertragung offen ist, kannst du nicht zurück ins Hauptmenü. Du kannst die Synchronisierung jetzt erneut versuchen.</string>
+    <string name="sync_hauptmenue_dialog_retry">Erneut synchronisieren</string>
+    <string name="sync_hauptmenue_dialog_bleiben">Hier bleiben</string>
+    <string name="sync_hauptmenue_retry_offen">Synchronisierung ist weiterhin offen. Bitte in der Zählerliste bleiben.</string>
+    <string name="sync_hauptmenue_retry_erfolgreich">Synchronisierung erfolgreich. Rückkehr ins Hauptmenü ist wieder möglich.</string>
+
+    <string name="ungespeichert_dialog_titel">Ungespeicherte Änderungen</string>
+    <string name="ungespeichert_dialog_text">Du hast noch nicht gespeicherte Änderungen. Möchtest du vor dem Verlassen speichern?</string>
+    <string name="ungespeichert_dialog_speichern">Speichern</string>
+    <string name="ungespeichert_dialog_verwerfen">Verwerfen</string>
+    <string name="ungespeichert_dialog_abbrechen">Abbrechen</string>
+    <string name="abschluss_dialog_titel">Zählung abschließen</string>
+    <string name="abschluss_dialog_text">Soll diese BlattNr jetzt als abgeschlossen markiert werden?</string>
+    <string name="abschluss_dialog_ja">Abschließen</string>
+    <string name="abschluss_dialog_nein">Noch offen lassen</string>
+    <string name="abschluss_dialog_abbrechen">Abbrechen</string>
+    <string name="abschluss_erfolgreich">BlattNr wurde abgeschlossen.</string>
+    <string name="abschluss_fehler">BlattNr konnte nicht abgeschlossen werden.</string>
+    <string name="abmelden_dialog_titel">Abmelden</string>
+    <string name="abmelden_dialog_text">Möchtest du dich wirklich ausloggen?</string>
+    <string name="abmelden_dialog_ja">Ausloggen</string>
+    <string name="abmelden_dialog_nein">Abbrechen</string>
+
+    <string name="zurueck_beschreibung">Zurück zum Hauptmenü</string>
+    <string name="unbekannt_wert">unbekannt</string>
+    <string name="kein_mengenwert">–</string>
+    <string name="abgeschlossene_liste_dialog_titel">BlattNr ist bereits abgeschlossen</string>
+    <string name="abgeschlossene_liste_dialog_text">Die BlattNr %1$s ist bereits abgeschlossen. Du kannst sie nur ansehen oder wieder zur Bearbeitung öffnen.</string>
+    <string name="abgeschlossene_liste_dialog_bearbeiten">Wieder bearbeiten</string>
+    <string name="abgeschlossene_liste_dialog_nicht_bearbeiten">Nur ansehen</string>
+    <string name="abgeschlossene_liste_oeffnen_fehler">BlattNr konnte nicht zur Bearbeitung geöffnet werden.</string>
+</resources>

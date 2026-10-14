@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <dimen name="login_screen_padding">28dp</dimen>
+    <dimen name="login_content_max_width">360dp</dimen>
+    <dimen name="login_screen_horizontal_margin">30dp</dimen>
+    <dimen name="login_footer_bottom_margin">30dp</dimen>
+
+    <dimen name="login_logo_tile_width">118dp</dimen>
+    <dimen name="login_logo_tile_height">104dp</dimen>
+    <dimen name="login_logo_tile_radius">24dp</dimen>
+    <dimen name="login_logo_width">120dp</dimen>
+    <dimen name="login_logo_height">110dp</dimen>
+    <dimen name="login_logo_radius">24dp</dimen>
+    <dimen name="login_logo_inner_padding">12dp</dimen>
+
+    <dimen name="login_title_size">36sp</dimen>
+    <dimen name="login_description_size">17sp</dimen>
+    <dimen name="login_label_size">13sp</dimen>
+    <dimen name="login_input_text_size">20sp</dimen>
+    <dimen name="login_button_text_size">19sp</dimen>
+    <dimen name="login_footer_size">13sp</dimen>
+    <dimen name="login_body_size">15sp</dimen>
+    <dimen name="login_input_label_size">12sp</dimen>
+    <dimen name="login_input_value_size">22sp</dimen>
+    <dimen name="login_footer_text_size">12sp</dimen>
+    <dimen name="login_title_top_margin">30dp</dimen>
+    <dimen name="login_subtitle_top_margin">12dp</dimen>
+
+    <dimen name="login_input_height">86dp</dimen>
+    <dimen name="login_input_radius">20dp</dimen>
+    <dimen name="login_input_top_margin">30dp</dimen>
+    <dimen name="login_input_padding_horizontal">18dp</dimen>
+    <dimen name="login_input_padding_top">14dp</dimen>
+    <dimen name="login_input_padding_bottom">12dp</dimen>
+
+    <dimen name="login_button_height">64dp</dimen>
+    <dimen name="login_button_radius">24dp</dimen>
+    <dimen name="login_button_top_margin">24dp</dimen>
+
+</resources>

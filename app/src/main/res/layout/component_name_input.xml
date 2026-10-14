@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/loginInputContainer"
+    android:layout_width="match_parent"
+    android:layout_height="86dp"
+    android:layout_marginTop="30dp"
+    android:background="@drawable/bg_login_input_card"
+    android:orientation="vertical"
+    android:paddingStart="18dp"
+    android:paddingTop="14dp"
+    android:paddingEnd="18dp"
+    android:paddingBottom="12dp">
+
+    <TextView
+        android:id="@+id/loginInputLabelTextView"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:fontFamily="sans-serif-medium"
+        android:text="@string/login_zaehler_label"
+        android:textColor="#8FA4CF"
+        android:textSize="12sp" />
+
+    <EditText
+        android:id="@+id/zaehlerNameEditText"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_marginTop="8dp"
+        android:layout_weight="1"
+        android:background="@android:color/transparent"
+        android:fontFamily="sans-serif-medium"
+        android:gravity="bottom"
+        android:hint="@string/login_beispielname"
+        android:imeOptions="actionDone"
+        android:inputType="textPersonName"
+        android:padding="0dp"
+        android:textColor="#FFFFFF"
+        android:textColorHint="#F3F7FF"
+        android:textSize="22sp"
+        tools:text="Max Mustermann"
+        xmlns:tools="http://schemas.android.com/tools" />
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="2dp"
+        android:layout_marginTop="10dp"
+        android:background="@drawable/bg_login_focus_line" />
+
+</LinearLayout>

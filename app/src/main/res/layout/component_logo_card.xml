@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/loginIconContainer"
+    android:layout_width="120dp"
+    android:layout_height="110dp"
+    android:background="@drawable/bg_login_logo_tile"
+    android:elevation="10dp"
+    android:padding="12dp">
+
+    <ImageView
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:adjustViewBounds="true"
+        android:contentDescription="@null"
+        android:scaleType="fitCenter"
+        android:src="@drawable/inventur_demo_logo" />
+
+</FrameLayout>

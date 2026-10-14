@@ -1,0 +1,323 @@
+package com.example.myapplication;
+
+import android.content.Context;
+import android.text.InputType;
+import android.text.Editable;
+import android.text.TextWatcher;
+import android.view.KeyEvent;
+import android.view.LayoutInflater;
+import android.view.View;
+import android.view.ViewGroup;
+import android.view.inputmethod.EditorInfo;
+import android.widget.EditText;
+import android.widget.TextView;
+
+import androidx.annotation.NonNull;
+import androidx.appcompat.app.AlertDialog;
+import androidx.core.content.ContextCompat;
+import androidx.recyclerview.widget.RecyclerView;
+
+import com.google.android.material.card.MaterialCardView;
+
+import java.util.ArrayList;
+import java.util.List;
+
+// Der Adapter verbindet die fachlichen Artikeldaten mit der RecyclerView.
+// Er entscheidet also, wie ein einzelner Artikel auf dem Bildschirm befuellt wird.
+public class ArtikelAdapter extends RecyclerView.Adapter<ArtikelAdapter.ArtikelViewHolder> {
+
+    public interface OnArtikelInteraktionListener {
+        void onArtikelStatusChanged();
+
+        void onArtikelFokusAngefordert(int adapterPosition);
+
+        void onNaechstesArtikelFeldAngefordert(int adapterPosition);
+    }
+
+    private final List<Artikel> artikelListe;
+    private final List<Artikel> sichtbareArtikel;
+    private final OnArtikelInteraktionListener onArtikelInteraktionListener;
+    private final boolean bearbeitungErlaubt;
+    private String suchbegriff = "";
+    private int filterModus = FILTER_ALLE;
+
+    private static final int FILTER_ALLE = 1;
+    private static final int FILTER_OFFEN = 2;
+    private static final int FILTER_GEZAEHLT = 3;
+    private static final int FILTER_UNTER_MINDESTBESTAND = 4;
+
+    public ArtikelAdapter(
+            List<Artikel> artikelListe,
+            boolean bearbeitungErlaubt,
+            OnArtikelInteraktionListener onArtikelInteraktionListener
+    ) {
+        this.artikelListe = artikelListe;
+        this.sichtbareArtikel = new ArrayList<>(artikelListe);
+        this.bearbeitungErlaubt = bearbeitungErlaubt;
+        this.onArtikelInteraktionListener = onArtikelInteraktionListener;
+    }
+
+    @NonNull
+    @Override
+    public ArtikelViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
+        // Hier wird das Layout fuer genau eine Listenzeile erzeugt.
+        View view = LayoutInflater.from(parent.getContext()).inflate(R.layout.item_artikel, parent, false);
+        return new ArtikelViewHolder(view);
+    }
+
+    @Override
+    public void onBindViewHolder(@NonNull ArtikelViewHolder holder, int position) {
+        // Hier werden die Daten des Artikels an der aktuellen Position in die View geschrieben.
+        holder.bind(sichtbareArtikel.get(position), bearbeitungErlaubt, onArtikelInteraktionListener);
+    }
+
+    @Override
+    public int getItemCount() {
+        return sichtbareArtikel.size();
+    }
+
+    public void zeigeAlleArtikel() {
+        filterModus = FILTER_ALLE;
+        aktualisiereSichtbareArtikel();
+    }
+
+    public void zeigeNurGezaehlteArtikel() {
+        filterModus = FILTER_GEZAEHLT;
+        aktualisiereSichtbareArtikel();
+    }
+
+    public void zeigeNurUngezaehlteArtikel() {
+        filterModus = FILTER_OFFEN;
+        aktualisiereSichtbareArtikel();
+    }
+
+    public void zeigeNurUnterMindestbestandArtikel() {
+        filterModus = FILTER_UNTER_MINDESTBESTAND;
+        aktualisiereSichtbareArtikel();
+    }
+
+    public void setSuchbegriff(String suchbegriff) {
+        this.suchbegriff = suchbegriff == null ? "" : suchbegriff.trim().toLowerCase();
+        aktualisiereSichtbareArtikel();
+    }
+
+    private void aktualisiereSichtbareArtikel() {
+        sichtbareArtikel.clear();
+        for (Artikel artikel : artikelListe) {
+            if (passtZumFilter(artikel) && passtZumSuchbegriff(artikel)) {
+                sichtbareArtikel.add(artikel);
+            }
+        }
+        notifyDataSetChanged();
+    }
+
+    private boolean passtZumFilter(Artikel artikel) {
+        if (filterModus == FILTER_OFFEN) {
+            return !artikel.istGezaehlt();
+        }
+        if (filterModus == FILTER_GEZAEHLT) {
+            return artikel.istGezaehlt();
+        }
+        if (filterModus == FILTER_UNTER_MINDESTBESTAND) {
+            return artikel.istUnterMindestbestand();
+        }
+        return true;
+    }
+
+    private boolean passtZumSuchbegriff(Artikel artikel) {
+        if (suchbegriff.isEmpty()) {
+            return true;
+        }
+        return enthaeltSuchbegriff(artikel.getArtikelnummer())
+                || enthaeltSuchbegriff(artikel.getBezeichnung())
+                || enthaeltSuchbegriff(artikel.getLagerort())
+                || String.valueOf(artikel.getPositionsNummer()).contains(suchbegriff);
+    }
+
+    private boolean enthaeltSuchbegriff(String wert) {
+        return wert != null && wert.toLowerCase().contains(suchbegriff);
+    }
+
+    static class ArtikelViewHolder extends RecyclerView.ViewHolder {
+
+        private final MaterialCardView artikelCardView;
+        private final TextView positionsnummerTextView;
+        private final TextView artikelnummerTextView;
+        private final TextView anmerkungButton;
+        private final TextView letzteZaehlmengeTextView;
+        private final TextView bezeichnungTextView;
+        private final TextView lagerortTextView;
+        private final TextView lagerortDetailTextView;
+        private final TextView istMengeTextView;
+        private final TextView mindestbestandTextView;
+        private final TextView zaehlstatusTextView;
+        private final EditText zaehlMengeEditText;
+        private TextWatcher zaehlMengeTextWatcher;
+
+        ArtikelViewHolder(@NonNull View itemView) {
+            super(itemView);
+            // Der ViewHolder merkt sich die Unterelemente einer Listenzeile,
+            // damit sie beim Scrollen effizient wiederverwendet werden koennen.
+            artikelCardView = itemView.findViewById(R.id.artikelCardView);
+            positionsnummerTextView = itemView.findViewById(R.id.positionsnummerTextView);
+            artikelnummerTextView = itemView.findViewById(R.id.artikelnummerTextView);
+            anmerkungButton = itemView.findViewById(R.id.anmerkungButton);
+            letzteZaehlmengeTextView = itemView.findViewById(R.id.letzteZaehlmengeTextView);
+            bezeichnungTextView = itemView.findViewById(R.id.bezeichnungTextView);
+            lagerortTextView = itemView.findViewById(R.id.lagerortTextView);
+            lagerortDetailTextView = itemView.findViewById(R.id.lagerortDetailTextView);
+            istMengeTextView = itemView.findViewById(R.id.istMengeTextView);
+            mindestbestandTextView = itemView.findViewById(R.id.mindestbestandTextView);
+            zaehlstatusTextView = itemView.findViewById(R.id.zaehlstatusTextView);
+            zaehlMengeEditText = itemView.findViewById(R.id.zaehlMengeEditText);
+        }
+
+        void bind(Artikel artikel, boolean bearbeitungErlaubt, OnArtikelInteraktionListener onArtikelInteraktionListener) {
+            // Diese Methode uebertraegt die Werte aus dem Modell in die sichtbaren Textfelder.
+            positionsnummerTextView.setText(String.valueOf(artikel.getPositionsNummer()));
+            artikelnummerTextView.setText(artikel.getArtikelnummer());
+            bezeichnungTextView.setText(artikel.getBezeichnung());
+            // In der Original-Artikelzeile gibt es den Lagerort aktuell nur im Detailbereich.
+            // Falls ein Layout lagerortTextView nicht enthaelt, darf die Originalansicht nicht abstuerzen.
+            if (lagerortTextView != null) {
+                lagerortTextView.setText(artikel.getLagerort());
+            }
+            lagerortDetailTextView.setText(artikel.getLagerort());
+            letzteZaehlmengeTextView.setText(formatiereMenge(artikel.getLetzteZaehlmenge()));
+            istMengeTextView.setText(String.valueOf(artikel.getIstMenge()));
+            mindestbestandTextView.setText(String.valueOf(artikel.getMindestbestand()));
+            aktualisiereAnmerkungButton(artikel);
+
+            if (zaehlMengeTextWatcher != null) {
+                zaehlMengeEditText.removeTextChangedListener(zaehlMengeTextWatcher);
+            }
+
+            Integer zaehlMenge = artikel.getZaehlMenge();
+            zaehlMengeEditText.setText(zaehlMenge == null ? "" : String.valueOf(zaehlMenge));
+
+            zaehlMengeTextWatcher = new TextWatcher() {
+                @Override
+                public void beforeTextChanged(CharSequence s, int start, int count, int after) {
+                }
+
+                @Override
+                public void onTextChanged(CharSequence s, int start, int before, int count) {
+                }
+
+                @Override
+                public void afterTextChanged(Editable editable) {
+                    String eingabe = editable.toString().trim();
+                    if (eingabe.isEmpty()) {
+                        artikel.setZaehlMenge(null);
+                    } else {
+                        try {
+                            int zaehlMenge = Integer.parseInt(eingabe);
+                            artikel.setZaehlMenge(Math.max(0, zaehlMenge));
+                        } catch (NumberFormatException exception) {
+                            artikel.setZaehlMenge(null);
+                            zaehlMengeEditText.setError(itemView.getContext().getString(R.string.zaehlmenge_ungueltig));
+                        }
+                    }
+                    aktualisiereKartenrahmen(artikel);
+                    onArtikelInteraktionListener.onArtikelStatusChanged();
+                }
+            };
+            zaehlMengeEditText.addTextChangedListener(zaehlMengeTextWatcher);
+            zaehlMengeEditText.setEnabled(bearbeitungErlaubt);
+            zaehlMengeEditText.setFocusable(bearbeitungErlaubt);
+            zaehlMengeEditText.setFocusableInTouchMode(bearbeitungErlaubt);
+            zaehlMengeEditText.setAlpha(bearbeitungErlaubt ? 1f : 0.55f);
+            anmerkungButton.setEnabled(bearbeitungErlaubt);
+            anmerkungButton.setAlpha(bearbeitungErlaubt ? 1f : 0.55f);
+            zaehlMengeEditText.setOnFocusChangeListener((v, hasFocus) -> {
+                if (hasFocus) {
+                    meldeAktivenArtikelAn(onArtikelInteraktionListener);
+                }
+            });
+            zaehlMengeEditText.setOnClickListener(v -> meldeAktivenArtikelAn(onArtikelInteraktionListener));
+            zaehlMengeEditText.setOnEditorActionListener((v, actionId, event) -> {
+                boolean istEnterTaste = event != null
+                        && event.getAction() == KeyEvent.ACTION_DOWN
+                        && event.getKeyCode() == KeyEvent.KEYCODE_ENTER;
+                if (actionId == EditorInfo.IME_ACTION_NEXT || actionId == EditorInfo.IME_ACTION_DONE || istEnterTaste) {
+                    meldeNaechstesFeldAn(onArtikelInteraktionListener);
+                    return true;
+                }
+                return false;
+            });
+            anmerkungButton.setOnClickListener(v -> {
+                if (bearbeitungErlaubt) {
+                    oeffneAnmerkungsDialog(artikel, onArtikelInteraktionListener);
+                }
+            });
+
+            aktualisiereKartenrahmen(artikel);
+        }
+
+        private String formatiereMenge(Integer menge) {
+            return menge == null ? itemView.getContext().getString(R.string.kein_mengenwert) : String.valueOf(menge);
+        }
+
+        private void oeffneAnmerkungsDialog(Artikel artikel, OnArtikelInteraktionListener onArtikelInteraktionListener) {
+            Context context = itemView.getContext();
+            EditText dialogEditText = new EditText(context);
+            dialogEditText.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+            dialogEditText.setMinLines(3);
+            dialogEditText.setMaxLines(5);
+            dialogEditText.setHint(R.string.anmerkung_hint);
+            dialogEditText.setText(artikel.getAnmerkung());
+            dialogEditText.setSelection(dialogEditText.getText().length());
+
+            new AlertDialog.Builder(context)
+                    .setTitle(R.string.anmerkung_dialog_titel)
+                    .setView(dialogEditText)
+                    .setPositiveButton(R.string.anmerkung_dialog_speichern, (dialog, which) -> {
+                        artikel.setAnmerkung(dialogEditText.getText() == null ? "" : dialogEditText.getText().toString().trim());
+                        aktualisiereAnmerkungButton(artikel);
+                        onArtikelInteraktionListener.onArtikelStatusChanged();
+                    })
+                    .setNegativeButton(R.string.anmerkung_dialog_abbrechen, (dialog, which) -> dialog.dismiss())
+                    .show();
+        }
+
+        private void meldeAktivenArtikelAn(OnArtikelInteraktionListener onArtikelInteraktionListener) {
+            int adapterPosition = getBindingAdapterPosition();
+            if (adapterPosition != RecyclerView.NO_POSITION) {
+                onArtikelInteraktionListener.onArtikelFokusAngefordert(adapterPosition);
+            }
+        }
+
+        private void meldeNaechstesFeldAn(OnArtikelInteraktionListener onArtikelInteraktionListener) {
+            int adapterPosition = getBindingAdapterPosition();
+            if (adapterPosition != RecyclerView.NO_POSITION) {
+                onArtikelInteraktionListener.onNaechstesArtikelFeldAngefordert(adapterPosition);
+            }
+        }
+
+        private void aktualisiereAnmerkungButton(Artikel artikel) {
+            boolean hatAnmerkung = artikel.getAnmerkung() != null && !artikel.getAnmerkung().trim().isEmpty();
+            anmerkungButton.setText(hatAnmerkung ? R.string.anmerkung_button_gesetzt : R.string.anmerkung_button);
+            anmerkungButton.setTextColor(ContextCompat.getColor(
+                    itemView.getContext(),
+                    hatAnmerkung ? R.color.card_border_ok : android.R.color.white
+            ));
+        }
+
+        private void aktualisiereKartenrahmen(Artikel artikel) {
+            // Noch nicht erfasste Werte bleiben neutral. Sobald eine Zaehlmenge gesetzt ist,
+            // zeigt der Rahmen direkt, ob der Mindestbestand unterschritten wurde.
+            int strokeColor = ContextCompat.getColor(itemView.getContext(), R.color.card_border_neutral);
+            if (artikel.getZaehlMenge() != null) {
+                strokeColor = artikel.istUnterMindestbestand()
+                        ? ContextCompat.getColor(itemView.getContext(), R.color.card_border_warning)
+                        : ContextCompat.getColor(itemView.getContext(), R.color.card_border_ok);
+            }
+
+            artikelCardView.setStrokeWidth(6);
+            artikelCardView.setStrokeColor(strokeColor);
+            zaehlstatusTextView.setText(artikel.istGezaehlt()
+                    ? R.string.zaehlstatus_gezaehlt
+                    : R.string.zaehlstatus_offen);
+        }
+    }
+}

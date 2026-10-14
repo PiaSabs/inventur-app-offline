@@ -1,0 +1,10 @@
+-- Ausschliesslich fiktive Daten in der isolierten Testcontainers-Datenbank.
+INSERT INTO zaehlsitzung
+    (id, zaehlerliste_id, zaehltag, runde_nr, status, status_version, gestartet_am, abgeschlossen_am)
+VALUES
+    ('60000000-0000-4000-8000-000000000003', '10000000-0000-4000-8000-000000000001',
+     '2026-10-14', 1, 'OFFEN', 1, '2026-10-14T08:00:00Z', NULL),
+    ('60000000-0000-4000-8000-000000000002', '10000000-0000-4000-8000-000000000001',
+     '2026-10-13', 2, 'ABGESCHLOSSEN', 2, '2026-10-13T10:00:00Z', '2026-10-13T11:00:00Z'),
+    ('60000000-0000-4000-8000-000000000001', '10000000-0000-4000-8000-000000000001',
+     '2026-10-13', 1, 'ABGESCHLOSSEN', 2, '2026-10-13T10:00:00+02:00', '2026-10-13T11:00:00+02:00');

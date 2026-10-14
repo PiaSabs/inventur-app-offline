@@ -1,0 +1,138 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/zaehlerlistenRoot"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/bg_screen_gradient"
+    android:padding="16dp"
+    tools:context=".ZaehlerlistenActivity">
+
+    <LinearLayout
+        android:id="@+id/zaehlerlistenHeaderContainer"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent">
+
+        <FrameLayout
+            android:id="@+id/zaehlerlistenZurueckButtonWrapper"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:layout_marginEnd="10dp"
+            android:background="@drawable/bg_meta_panel">
+
+            <ImageButton
+                android:id="@+id/zaehlerlistenZurueckButton"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:background="@android:color/transparent"
+                android:contentDescription="@string/zurueck_beschreibung"
+                android:padding="10dp"
+                android:src="@android:drawable/ic_media_previous"
+                app:tint="#FFFFFF" />
+
+        </FrameLayout>
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/zaehlerlistenTitleTextView"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/zaehlerlisten_titel"
+                android:textColor="#FFFFFF"
+                android:textSize="28sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/zaehlerlistenSubtitleTextView"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:text="@string/zaehlerlisten_untertitel"
+                android:textColor="#C4D1E6"
+                android:textSize="14sp" />
+
+        </LinearLayout>
+
+        <FrameLayout
+            android:id="@+id/zaehlerlistenRefreshButtonWrapper"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:background="@drawable/bg_meta_panel">
+
+            <ImageButton
+                android:id="@+id/zaehlerlistenAktualisierenButton"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:background="@android:color/transparent"
+                android:contentDescription="@string/aktualisieren_beschreibung"
+                android:padding="9dp"
+                android:src="@android:drawable/ic_popup_sync"
+                app:tint="#FFFFFF" />
+
+        </FrameLayout>
+
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/syncStatusContainer"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:background="@drawable/bg_meta_panel"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="10dp"
+        android:paddingTop="5dp"
+        android:paddingEnd="8dp"
+        android:paddingBottom="5dp"
+        android:visibility="gone"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/zaehlerlistenHeaderContainer">
+
+        <TextView
+            android:id="@+id/syncStatusTextView"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/sync_status_erfolgreich"
+            android:textColor="#B6F0C2"
+            android:textSize="12sp" />
+
+        <ImageButton
+            android:id="@+id/syncStatusInfoButton"
+            android:layout_width="24dp"
+            android:layout_height="24dp"
+            android:layout_marginStart="6dp"
+            android:background="@android:color/transparent"
+            android:contentDescription="@string/sync_status_info_beschreibung"
+            android:padding="3dp"
+            android:src="@drawable/ic_info_circle"
+            android:visibility="gone"
+            app:tint="#FFE19A" />
+
+    </LinearLayout>
+
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/zaehlerlistenRecyclerView"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:layout_marginTop="16dp"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/syncStatusContainer"
+        tools:itemCount="4"
+        tools:listitem="@layout/item_zaehlerliste" />
+
+</androidx.constraintlayout.widget.ConstraintLayout>
+
