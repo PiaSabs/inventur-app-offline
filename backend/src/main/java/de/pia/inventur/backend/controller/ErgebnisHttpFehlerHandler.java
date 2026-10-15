@@ -1,6 +1,7 @@
 package de.pia.inventur.backend.controller;
 
 import de.pia.inventur.backend.dto.SecurityFehlerAntwort;
+import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.dao.DataAccessException;
@@ -13,11 +14,13 @@ import org.springframework.web.method.annotation.MethodArgumentTypeMismatchExcep
 import org.springframework.web.server.ResponseStatusException;
 
 @Order(Ordered.HIGHEST_PRECEDENCE)
-@RestControllerAdvice(assignableTypes = ErgebnisController.class)
+@RestControllerAdvice(assignableTypes = {ErgebnisController.class, ZaehlblattAbschlussController.class})
 public class ErgebnisHttpFehlerHandler {
     @ExceptionHandler({ResponseStatusException.class, HttpMessageNotReadableException.class, MethodArgumentTypeMismatchException.class})
-    ResponseEntity<SecurityFehlerAntwort> eingabeFehler() {
-        return ResponseEntity.badRequest().body(new SecurityFehlerAntwort(400, "UNGUELTIGER_REQUEST", "Ergebnisrequest ist ungueltig."));
+    ResponseEntity<SecurityFehlerAntwort> eingabeFehler(HttpServletRequest request) {
+        String detail = request.getRequestURI().endsWith("/abschluss")
+                ? "Abschlussrequest ist ungueltig." : "Ergebnisrequest ist ungueltig.";
+        return ResponseEntity.badRequest().body(new SecurityFehlerAntwort(400, "UNGUELTIGER_REQUEST", detail));
     }
 
     @ExceptionHandler({DataAccessException.class, TransactionException.class, IllegalStateException.class, ArithmeticException.class})

@@ -57,13 +57,6 @@ public class ErgebnisController {
     }
 
     private UUID pfadUuid(String wert) {
-        try {
-            var uuid = UUID.fromString(wert);
-            if (!uuid.toString().equalsIgnoreCase(wert)) throw new IllegalArgumentException();
-            return uuid;
-        } catch (IllegalArgumentException invalid) {
-            throw new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST,
-                    "Ungueltiger Ergebnisrequest");
-        }
+        return de.pia.inventur.backend.dto.RequestJsonFelder.pfadUuid(wert);
     }
 }

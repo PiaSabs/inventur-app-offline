@@ -3,7 +3,192 @@
 Eigenstaendiges Maven-Projekt mit Java 21 und Spring Boot 4.1.1.
 Das Android-Projekt bleibt ein separates Gradle-Projekt.
 
-## Aktueller Stand: Lernschritt 31 – automatischer Zaehlsitzungsabschluss
+## Aktueller Stand: Lernschritt 32 – REST-Endpunkt fuer Zaehlblattabschluss
+
+### Endpunkt und Vertrag
+
+`PUT /api/v1/sitzungen/{sitzungId}/blaetter/{blattId}/abschluss`
+mit Content-Type `application/json` und `Authorization: Bearer <JWT>`.
+Die Route erweitert die bestehenden Blatt-Lese-URLs um die ausdrueckliche Aktion.
+
+Der Body hat genau sieben Pflichtfelder. Sitzungs- und Blatt-ID stammen nur aus
+dem URL-Pfad. Benutzer-ID, Benutzername, Formatversion oder weitere Felder sind
+im Body nicht erlaubt. Beispiel mit ausschliesslich fiktiven IDs:
+
+```json
+{
+  "requestId": "a1000000-0000-4000-8000-000000000001",
+  "zaehlerlisteId": "92000000-0000-4000-8000-000000000001",
+  "zuweisungVersion": 1,
+  "erwarteteSitzungStatusVersion": 1,
+  "erwarteteBlattStatusVersion": 1,
+  "abschlussBestaetigt": true,
+  "unvollstaendigBestaetigt": true
+}
+```
+
+Beispielpfad:
+`/api/v1/sitzungen/93000000-0000-4000-8000-000000000001/blaetter/94000000-0000-4000-8000-000000000001/abschluss`.
+
+`abschlussBestaetigt=true` bestaetigt bewusst das Ende der Blattbearbeitung.
+Sind Positionen ungezaehlt, muss nach einer Warnung auch
+`unvollstaendigBestaetigt=true` gesetzt sein. Bei vollstaendiger Zaehlung darf
+dieses zweite Feld false sein, muss aber im Body vorhanden sein.
+null-Mengen und Positionen ohne Ergebniszeile bleiben ungezaehlt; Menge 0 gilt als gezaehlt.
+
+Beispielantwort HTTP 200 beim letzten, ausdruecklich unvollstaendig bestaetigten
+Blatt; die Zeit ist eine fiktive Serverzeit fuer dieses Beispiel:
+
+```json
+{
+  "requestId": "a1000000-0000-4000-8000-000000000001",
+  "zaehlblattId": "94000000-0000-4000-8000-000000000001",
+  "entscheidung": "AKZEPTIERT",
+  "blattStatus": "ABGESCHLOSSEN",
+  "blattStatusVersion": 2,
+  "ungezaehltePositionen": 2,
+  "abgeschlossenAm": "2026-10-15T08:00:00Z",
+  "sitzungDurchDiesenVorgangAbgeschlossen": true,
+  "sitzungsStatus": "ABGESCHLOSSEN",
+  "sitzungsStatusVersion": 2
+}
+```
+
+Sind noch andere Blaetter offen, lauten die letzten drei Felder false, OFFEN und
+die unveraenderte Sitzungsstatusversion. Das letzte bestaetigte Blatt schliesst
+die Sitzung automatisch innerhalb derselben Transaktion, ohne zweiten Request.
+Die Regeln und der Sonderfall einer Sitzung ohne Blaetter bleiben unveraendert.
+
+### Authentifizierung und Autorisierung
+
+Die bestehende Spring-Security-Kette prueft JWT-Signatur, Issuer, Audience und
+Zeitgueltigkeit. Erst danach ordnet das Paar aus Issuer und Subject ein aktives
+lokales Konto zu. Der Controller verwendet ausschliesslich dessen InventurPrincipal.
+Weder JSON-Felder noch X-Benutzer-Id-Header bestimmen den Urheber.
+
+Die Route verlangt Authentifizierung, aber keine vorgelagerte Rollen- oder
+Listenpruefung. Nur so kann der Service ein sicheres, urhebergebundenes Replay
+vor neuer fachlicher Autorisierung erkennen. Fuer neue Requests prueft der
+unveraenderte ZaehlblattAbschlussService Rolle, aktive Identitaet, Zuweisung,
+vollstaendige Hierarchie, Status, Versionen und beide Bestaetigungen unter den
+bestehenden PostgreSQL-Sperren. Der Controller enthaelt keine eigene Abschlusslogik.
+
+### Validierung und HTTP-Fehler
+
+Der gemeinsame RequestJsonFelder-Leser wird auch vom vorhandenen Ergebnis-PUT
+verwendet. UUIDs muessen vollstaendig sein; Versionen muessen echte JSON-Ganzzahlen
+im Long-Bereich sein (Zuweisung >= 0, Statusversionen >= 1). Die Bestaetigungen
+muessen echte JSON-Booleans sein. Strings wie "true", Zahlen wie 1, null,
+fehlende/zusaetzliche Felder, doppelte Schluessel und nachgestellte JSON-Werte
+werden nicht stillschweigend umgedeutet.
+
+Fehler verwenden wie bisher genau `status`, `code` und `detail`:
+
+| HTTP | Bedeutung und Codes |
+| --- | --- |
+| 400 | Syntax, fehlende Pflichtfelder, ungueltige Typen/UUIDs/Versionen: UNGUELTIGER_REQUEST |
+| 401 | Fehlendes/ungueltiges JWT, unbekanntes oder inaktives lokales Konto: AUTHENTIFIZIERUNG_ERFORDERLICH |
+| 403 | Fehlende Rolle fuer einen neuen Abschluss: ZUGRIFF_VERWEIGERT |
+| 404 | Fremde/nicht sichtbare/unbekannte Ressourcen, falsche Hierarchie oder fremde Request-ID: RESSOURCE_NICHT_GEFUNDEN |
+| 409 | ZUWEISUNG_GEAENDERT, STATUSVERSION_VERALTET, REQUEST_ID_REUSED, SITZUNG_ABGESCHLOSSEN, BLATT_ABGESCHLOSSEN, NOCH_IN_BEARBEITUNG, ABSCHLUSS_NICHT_BESTAETIGT oder UNVOLLSTAENDIG_NICHT_BESTAETIGT |
+| 415 | Falscher Content-Type: UNTERSTUETZTER_MEDIENTYP_ERFORDERLICH |
+| 503 | Technische Speicher-/Commitfehler: SPEICHERUNG_VORUEBERGEHEND_NICHT_MOEGLICH; Retry-After: 1 |
+
+Eine vorhandene boolesche Bestaetigung false ist syntaktisch korrekt; wenn die
+Bestaetigung fachlich erforderlich ist, folgt 409. Ein fehlendes oder null-Feld
+ist dagegen ein Eingabefehler 400. Inaktive Konten werden in der Regel bereits
+vor dem Controller mit 401 abgewiesen. Falls sich der Kontozustand erst nach
+Authentifizierung aendert, faengt der bestehende Service dies erneut ab (403).
+
+Fremde, unbekannte und falsch zugeordnete Ziele haben dieselbe generische
+404-Antwort. Keine fremden IDs, Abschlussmengen, gespeicherten Antworten,
+Tokenursachen, SQL- oder Stacktrace-Details werden zurueckgegeben.
+Abschlussablehnungen erzeugen weiterhin kein neues Konfliktarchiv und keine
+dauerhafte Requestregistrierung. Die bisherige Ergebnis-Konfliktarchivierung
+und ihre Antwortvertraege bleiben erhalten.
+
+### Idempotenz und Grenzen bytegenauen Replays
+
+Der Controller ruft nur den vorhandenen Service auf. Nach erfolgreichem Commit
+gibt er den gespeicherten HTTP-Status und den gespeicherten JSON-Text als explizite
+UTF-8-Bytes zurueck. ByteArrayHttpMessageConverter verhindert eine erneute
+JSON-Serialisierung. Der echte HTTP-Test vergleicht empfangene byte[] mit den
+UTF-8-Bytes aus sync_request sowie Erstantwort und Wiederholung miteinander.
+Auch alte Sieben-Feld-Antworten mit abweichendem Whitespace bleiben unveraendert.
+
+Damit ist fuer den neuen Endpunkt der HTTP-Antwortkoerper im getesteten direkten
+Serverpfad bytegenau abgesichert. Der bisherige Ergebnis-Controller liefert
+gespeicherten String-Inhalt; seine bisherigen Tests verglichen primaer Text.
+Daraus allein wurde keine pauschale Bytegarantie fuer die gesamte HTTP-Antwort
+abgeleitet. Header wie Date, Transferrahmen, TLS und moegliche Proxy-Kompression
+sind nicht Teil der gespeicherten Antwort und werden nicht als identisch zugesagt.
+
+Identisches Replay durch denselben weiterhin aktiv authentifizierten Urheber
+liefert die alte Entscheidung auch nach Neuzuweisung, Rollenwechsel oder spaeterem
+Sitzungsabschluss. Neue Aenderungen werden trotzdem aktuell autorisiert.
+Deaktivierte Konten erhalten auch fuer Replay kein gueltiges Authentifizierungsergebnis.
+Anderer Inhalt bei derselben UUID fuehrt zu 409; fremder Urheber zu generischem 404.
+Auch die Pfad-IDs sind Teil des normalisierten internen Inhalts. Das kanonische
+Requestformat v1, Fingerabdruck, Sperren und Transaktionsgrenzen bleiben unveraendert.
+
+### Lernbegleitung und spaetere Android-Anbindung
+
+1. Ein REST-Controller nimmt HTTP-Anfragen entgegen, liest Pfad/Body, ruft den
+   passenden Dienst auf und uebersetzt dessen Ergebnis in eine HTTP-Antwort.
+2. Die Abschlussregeln bleiben im Service, damit HTTP und kuenftige interne
+   Aufrufer dieselben transaktionalen und fachlichen Regeln verwenden.
+3. Das Backend erkennt den angemeldeten Benutzer am kryptografisch geprueften
+   JWT und der vorhandenen lokalen Issuer-/Subject-Zuordnung.
+4. Eine frei uebernommene Benutzer-ID wuerde erlauben, sich als anderer Zaehler
+   auszugeben. Deshalb darf nur der vertrauenswuerdige Security-Kontext den Urheber liefern.
+5. 400 bedeutet ungueltige Eingabe, 401 fehlende/ungueltige Anmeldung, 403 fehlende
+   Berechtigung, 404 nicht verfuegbare/sichtbare Ressource und 409 fachlicher Konflikt.
+6. Offline-Uebertragungen koennen wegen verlorener Antworten wiederholt werden.
+   Dieselbe UUID mit demselben Inhalt darf nur die gespeicherte Entscheidung
+   liefern und niemals erneut Versionen erhoehen.
+7. Android kann spaeter nach bewusster Bestaetigung die Pfad-IDs, sieben JSON-Felder
+   und ein gueltiges Bearer-JWT senden. UUID und Inhalt bleiben bei Wiederholung
+   unveraendert. Ein lokaler Vormerkstatus gilt erst nach erfolgreicher Serverantwort
+   als bestaetigt; Warnung und Konfliktanzeige muessen dort gesondert umgesetzt werden.
+
+Noch keine Android-Integration, neue Runde, Wiedereroeffnung oder Administration.
+Kein Gesamtabschluss-Request, keine neuen fachlichen Regeln, keine Flyway- oder
+Render-Aenderungen, keine Commits/Pushes. Nur fiktive Testdaten, keine Unternehmensdaten.
+
+### Dateien und Tests
+
+Neue Dateien unter src/main/java/de/pia/inventur/backend:
+
+- controller/ZaehlblattAbschlussController.java
+- dto/ZaehlblattAbschlussHttpRequest.java
+- dto/RequestJsonFelder.java
+
+Neue Tests: src/test/java/de/pia/inventur/backend/ZaehlblattAbschlussHttpIntegrationTests.java.
+
+Angepasst: SecurityKonfiguration, ErgebnisHttpFehlerHandler, ErgebnisSpeichernRequest,
+ErgebnisController (gemeinsame strikte Syntaxpruefung), diese README und Projekt-README.
+Die internen Abschlussservices, Repositories, Requestnormalisierung und Migrationen
+sind unveraendert.
+
+Die Tests verwenden RANDOM_PORT, die echte Spring-Security-Kette, im Arbeitsspeicher
+erzeugte signierte Test-JWTs und PostgreSQL 17 via Testcontainers. Sie pruefen
+HTTP-Status und Antwortinhalt, Berechtigungen, strikte Eingaben, NULL/0, automatische
+Sitzungsschliessung, Daten-/Historienerhalt, exakte Antwortbytes, alte Replay-Antworten,
+parallele identische HTTP-Anfragen sowie Fehler nach Status-/Entscheidungsupdate
+und Rollback beim Commit-Guard. Die vorhandenen JWT-Testhilfen und SQL-Fixtures
+werden wiederverwendet.
+
+Abschliessender Maven-package-Build am 15.10.2026: 562 Tests erfolgreich (493 bisherige
+und 69 neue HTTP-Tests), keine Fehler, Fehlschlaege oder uebersprungenen Tests; BUILD SUCCESS.
+Der gezielte HTTP-/Security-Lauf bestand zuvor mit 156 Tests. V1 bis V9, Android,
+Abschlussservices und Repositories sind unveraendert. Keine Commits oder Pushes.
+Buildprotokoll: target/lernschritt32-build.log (ignoriertes lokales Buildartefakt).
+
+Empfohlener naechster Lernschritt: Den Android-Vertrag fuer lokalen Vormerkstatus,
+Warnung bei unvollstaendigen Blaettern und sichere Offline-Wiederholung zuerst
+festlegen. Die eigentliche Android-Implementierung erfolgt nur auf neue Anweisung.
+
+## Vorheriger Stand: Lernschritt 31 – automatischer Zaehlsitzungsabschluss
 
 Der bestehende interne ZaehlblattAbschlussService schliesst jetzt die Sitzung mit,
 wenn der bewusst bestaetigte Blattabschluss das letzte offene Blatt schliesst.

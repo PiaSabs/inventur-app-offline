@@ -43,8 +43,9 @@ public class SecurityKonfiguration {
                         .requestMatchers(HttpMethod.GET, "/api/v1/zaehlerlisten",
                                 "/api/v1/zaehlerlisten/*/sitzungen", "/api/v1/sitzungen/*/blaetter",
                                 "/api/v1/sitzungen/*/blaetter/*").authenticated()
-                        .requestMatchers(HttpMethod.PUT, "/api/v1/sitzungen/*/positionen/*/ergebnis").authenticated()
-                        // Neue Ergebnisrequests prueft der Speicherservice; Replays bleiben urhebergebunden.
+                        .requestMatchers(HttpMethod.PUT, "/api/v1/sitzungen/*/positionen/*/ergebnis",
+                                "/api/v1/sitzungen/*/blaetter/*/abschluss").authenticated()
+                        // Neue Schreibrequests pruefen die Services; Replays bleiben urhebergebunden.
                         .anyRequest().denyAll())
                 .sessionManagement(sitzung -> sitzung.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .requestCache(AbstractHttpConfigurer::disable)
