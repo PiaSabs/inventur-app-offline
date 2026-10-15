@@ -8,5 +8,5 @@ public record ErgebnisSpeichernInhalt(Integer formatVersion, SyncOperation opera
         UUID zaehlerlisteId, UUID zaehlsitzungId, UUID zaehlblattId, UUID zaehlpositionId,
         Long zuweisungVersion, Long basisRevision, Long lokaleRevision,
         Long erwarteteBlattStatusVersion, Long erwarteteSitzungStatusVersion,
-        Integer zaehlmenge, String anmerkung) {
+        Integer zaehlmenge, String anmerkung) implements SyncRequestInhalt {
 }

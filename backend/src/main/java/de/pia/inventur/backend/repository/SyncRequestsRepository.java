@@ -31,7 +31,7 @@ public interface SyncRequestsRepository extends JpaRepository<SyncRequestEntity,
             @Param("operation") String operation, @Param("listeId") UUID listeId,
             @Param("sitzungId") UUID sitzungId, @Param("blattId") UUID blattId,
             @Param("positionId") UUID positionId, @Param("zuweisungVersion") long zuweisungVersion,
-            @Param("basisRevision") long basisRevision, @Param("blattVersion") long blattVersion,
+            @Param("basisRevision") Long basisRevision, @Param("blattVersion") long blattVersion,
             @Param("sitzungVersion") long sitzungVersion, @Param("inhalt") String inhalt,
             @Param("fingerprint") String fingerprint, @Param("formatVersion") int formatVersion);
 

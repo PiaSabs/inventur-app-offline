@@ -8,7 +8,7 @@ import de.pia.inventur.backend.repository.SyncRequestsRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-/** Interne Wiederholungspruefung fuer ERGEBNIS_SPEICHERN; keine Reservierung oder fachliche Aenderung. */
+/** Interne Wiederholungspruefung fuer Ergebnis und Blattabschluss; keine Reservierung oder fachliche Aenderung. */
 @Service
 public class RequestWiederholungsService {
 
@@ -23,7 +23,7 @@ public class RequestWiederholungsService {
     // Bewusst nicht readOnly: PostgreSQL erlaubt SELECT FOR SHARE nicht in READ ONLY-Transaktionen.
     // Die DB-Sperre bleibt bis zum Ende dieser bzw. der aufrufenden Transaktion bestehen.
     @Transactional
-    public RequestPruefergebnis pruefe(UUID requestId, GepruefterUrheber urheber, ErgebnisSpeichernInhalt inhalt) {
+    public RequestPruefergebnis pruefe(UUID requestId, GepruefterUrheber urheber, SyncRequestInhalt inhalt) {
         if (requestId == null || urheber == null) {
             throw new IllegalArgumentException("Request-ID und gepruefter Urheber sind erforderlich");
         }
@@ -50,12 +50,12 @@ public class RequestWiederholungsService {
                         request.getAntwortHttpStatus(), request.getAntwortJson(), request.getVerarbeitetAm()));
     }
 
-    private static boolean gleicherKontext(SyncRequestEntity request, ErgebnisSpeichernInhalt inhalt) {
+    private static boolean gleicherKontext(SyncRequestEntity request, SyncRequestInhalt inhalt) {
         return request.getOperation() == inhalt.operation()
                 && request.getZaehlerliste().getId().equals(inhalt.zaehlerlisteId())
                 && request.getZaehlsitzung() != null && request.getZaehlsitzung().getId().equals(inhalt.zaehlsitzungId())
                 && request.getZaehlblatt() != null && request.getZaehlblatt().getId().equals(inhalt.zaehlblattId())
-                && request.getZaehlposition() != null && request.getZaehlposition().getId().equals(inhalt.zaehlpositionId())
+                && Objects.equals(request.getZaehlposition() == null ? null : request.getZaehlposition().getId(), inhalt.zaehlpositionId())
                 && request.getZuweisungVersion() == inhalt.zuweisungVersion()
                 && Objects.equals(request.getErwarteteErgebnisrevision(), inhalt.basisRevision())
                 && Objects.equals(request.getErwarteteBlattStatusVersion(), inhalt.erwarteteBlattStatusVersion())

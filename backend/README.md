@@ -3,7 +3,304 @@
 Eigenstaendiges Maven-Projekt mit Java 21 und Spring Boot 4.1.1.
 Das Android-Projekt bleibt ein separates Gradle-Projekt.
 
-## Aktueller Stand: Lernschritt 29
+## Aktueller Stand: Lernschritt 31 – automatischer Zaehlsitzungsabschluss
+
+Der bestehende interne ZaehlblattAbschlussService schliesst jetzt die Sitzung mit,
+wenn der bewusst bestaetigte Blattabschluss das letzte offene Blatt schliesst.
+Es gibt keinen zusaetzlichen Gesamtabschluss-Request, keine neue Request-ID und
+keinen weiteren Benutzerklick. Die Regeln fuer ausdrueckliche Blattabschluesse
+einschliesslich zusaetzlicher Zustimmung bei unvollstaendigen Blaettern bleiben bestehen.
+
+### Ablauf und Statusversionen
+
+1. Bekannte Request-ID wie bisher vor erneuter fachlicher Pruefung erkennen.
+2. Fuer neue Requests dieselbe Reihenfolge beibehalten:
+   Benutzer FOR SHARE -> Liste FOR SHARE -> Sitzung FOR UPDATE -> Blatt FOR UPDATE
+   -> Registrierung der Blattabschluss-Request-ID. Hierarchie, Zuweisung, Status,
+   Versionen, allgemeine und gegebenenfalls zusaetzliche Bestaetigung pruefen.
+3. Blattstatus auf ABGESCHLOSSEN setzen, Blattstatusversion exakt um eins erhoehen,
+   Serverzeit, Benutzer und letzter_status_request_id speichern.
+4. Unter der bereits gehaltenen exklusiven Sitzungssperre pruefen:
+   Mindestens ein Blatt muss zur Sitzung gehoeren und kein Blatt darf einen anderen
+   Status als ABGESCHLOSSEN besitzen. Ausschliesslich gespeicherte PostgreSQL-
+   Blattzustaende zaehlen; lokale Vormerkungen sind keine Serverbestaetigung.
+5. Gibt es weitere offene Blaetter, bleiben Sitzungsstatus, Version und Abschlusszeit
+   unveraendert. Andernfalls Sitzung auf ABGESCHLOSSEN setzen, ihre bisherige
+   Statusversion exakt um eins erhoehen und denselben PostgreSQL-Serverzeitpunkt
+   wie fuer den ausloesenden Blattabschluss speichern.
+6. Die vollstaendige Antwort mit Sitzungsstand und die AKZEPTIERT-Entscheidung
+   unter derselben Blattrequest-ID speichern. Erst der erfolgreiche gemeinsame
+   Commit von Blatt, Sitzung, Request und Antwort bestaetigt den Abschluss.
+
+EXISTS plus NOT EXISTS verhindert den Sonderfall einer leeren Sitzung.
+Auch der Abschluss genau eines vorhandenen Blatts kann die Sitzung schliessen.
+Ein einzelnes leeres Blatt ist dabei von einer Sitzung ohne Blaetter zu unterscheiden.
+
+Der Sitzungsabschluss wird dem letzten Blattrequest ueber dessen gespeicherte
+Antwort, Sitzungs-/Blattreferenz in sync_request sowie letzter_status_request_id
+am letzten Blatt zugeordnet. Die Sitzungstabelle besitzt kein eigenes
+letzter_status_request_id-Feld; ein solches ist fuer diese Zuordnung nicht erforderlich.
+Weder Schema noch Flyway V1 bis V9 werden veraendert.
+
+### Antwortvertrag und Replay-Kompatibilitaet
+
+Neue Erfolgsantworten behalten alle sieben bisherigen Blattfelder und ergaenzen:
+
+- sitzungDurchDiesenVorgangAbgeschlossen: true nur beim ausloesenden letzten Blattabschluss.
+- sitzungsStatus: OFFEN oder ABGESCHLOSSEN zum Zeitpunkt dieser Entscheidung.
+- sitzungsStatusVersion: damalige Sitzungsstatusversion, beim Sitzungsabschluss um eins erhoeht.
+
+Das kanonische Requestformat v1 und dessen SHA-256 bleiben unveraendert.
+Die additive Erweiterung betrifft ausschliesslich neu gespeicherte interne Antworten;
+es gibt weiterhin keinen Abschluss-REST-Endpunkt. Fuer bestehende Java-Aufrufer
+bleibt der siebenparametrige Antwortkonstruktor erhalten. Alte JSON-Antworten ohne
+Sitzungsfelder sind lesbar; die drei neuen Werte sind dann null (unbekannt).
+Daraus darf keine bestaetigte Sitzungsschliessung abgeleitet werden.
+
+Replay liefert weiterhin exakt den gespeicherten JSON-Text, HTTP-Status und
+Entscheidungszeitpunkt. Weder alte Sieben-Feld-Antworten noch fruehere Antworten
+mit OFFEN werden aus dem aktuellen Sitzungszustand neu erzeugt. Nach dem letzten
+Blattabschluss kann eine fruehere Antwort daher weiterhin OFFEN enthalten.
+Eine Wiederholung erhoeht keine Version und erzeugt keine weitere Requestzeile.
+
+Historische Sitzungen aus Lernschritt 30, die trotz geschlossener Blaetter noch
+OFFEN sind, werden durch Replay nicht nachtraeglich geschlossen. Es gibt hier keinen
+Backfill, Reparaturdienst oder eigenstaendigen Gesamtabschluss.
+
+### Sperren, Konkurrenz und Rollback
+
+Die exklusive Sitzungssperre bleibt von der Pruefung bis zum Commit gehalten:
+Zwei Abschluesse verschiedener Blaetter derselben Sitzung sehen ihre Aenderungen
+nacheinander. Der erste laesst die Sitzung offen, der letzte schliesst sie genau einmal.
+Es gibt keine nachtraegliche Hochstufung von SHARE auf UPDATE.
+
+Beim selben letzten Blatt liefert dieselbe Request-ID die gespeicherte Entscheidung;
+eine andere neue Request-ID wird nach dem ersten Commit wegen abgeschlossener
+Sitzung abgelehnt. Eine parallele Ergebnisaenderung committet entweder zuerst und
+wird mitgezaehlt, oder sie sieht anschliessend die geschlossene Sitzung und darf
+keine Menge mehr aendern. Die bestehende Konfliktarchivierung bleibt erhalten.
+
+Die Listen-SHARE-Sperre ordnet auch Neuzuweisungen: Eine zuerst committete
+Neuzuweisung verhindert den Abschluss des bisherigen Zaehlers. Ein bereits
+laufender letzter Abschluss kann mitsamt Sitzungsabschluss committen, bevor die
+wartende Neuzuweisung erfolgt.
+
+Fehler nach Sitzungsupdate, nach gespeicherter Entscheidung oder im beforeCommit-
+Guard rollen Blatt, Sitzung und Registrierung gemeinsam zurueck.
+Auch ein Versionsueberlauf fuehrt zum Rollback. Ergebnisse und Historien werden
+beim Sitzungsabschluss weder geaendert noch geloescht.
+
+### Lernbegleitung
+
+1. Die Sitzung schliesst automatisch, weil nach dem letzten bestaetigten Blatt keine
+   weitere Blattentscheidung aussteht. Das bildet BL-011 unmittelbar ab.
+2. Ein Gesamtabschluss waere eine doppelte Bestaetigung und koennte einen
+   Zwischenzustand hinterlassen. Der letzte Einzelblattrequest reicht aus.
+3. Die Sitzungssperre schuetzt die gemeinsame Entscheidung ueber alle Blaetter:
+   Kein zweiter Abschluss kann unabhaengig einen veralteten Gesamtzustand auswerten.
+4. Der gemeinsame Commit verhindert ein geschlossenes letztes Blatt bei offener
+   Sitzung oder eine akzeptierte Antwort ohne die zugehoerigen Statusaenderungen.
+5. Abschluss bedeutet bewusst beendete Arbeit, nicht zwingend lueckenlos gezaehlte
+   Positionen. Ausdruecklich unvollstaendig geschlossene Blaetter duerfen deshalb
+   ebenfalls den Sitzungsabschluss ausloesen. null bleibt ungezaehlt, 0 gezaehlt.
+
+### Dateien, Tests und Grenzen
+
+In Lernschritt 31 neu angelegte Dateien: keine.
+Angepasst wurden:
+
+- service/sync/ZaehlblattAbschlussService.java
+- service/sync/ZaehlblattAbschlussAntwort.java
+- repository/ZaehlblattAbschlussRepository.java
+- src/test/java/de/pia/inventur/backend/ZaehlblattAbschlussIntegrationTests.java
+- backend/README.md und die Projekt-README.md
+
+Die drei Produktionsdateien liegen unter src/main/java/de/pia/inventur/backend.
+19 zusaetzliche PostgreSQL-Integrationstests pruefen leere/einzelne/mehrere Blaetter,
+unvollstaendige Abschluesse, NULL/0, Status und Versionen, Serverzeit, Zuordnung,
+Replay alter und neuer Antworten, Erhalt von Ergebnissen/Historien, Versionsueberlauf,
+echte parallele Transaktionen fuer verschiedene und gleiche letzte Blaetter,
+Ergebnisaenderungen sowie Neuzuweisungen und vollstaendige Rollbacks.
+
+Abschliessender Maven-package-Build am 15.10.2026: 493 Tests erfolgreich (474 bisherige
+und 19 zusaetzliche), keine Fehler, Fehlschlaege oder uebersprungenen Tests; BUILD SUCCESS.
+Davon 62 Abschluss-Integrationstests und 10 unveraenderte Protokolltests.
+Buildprotokoll: target/lernschritt31-build.log (ignoriertes lokales Buildartefakt).
+
+Die 474 bisherigen Tests bleiben erhalten. Drei Erwartungen aus Lernschritt 30
+wurden fachlich angepasst: neue Antworten enthalten zehn statt sieben Felder,
+der Abschluss aller Blaetter schliesst jetzt die Sitzung und das gilt auch bei
+parallelen Abschluessen verschiedener Blaetter. Ihre bisherigen Pruefungen bleiben bestehen.
+
+Keine Android-Aenderung, neuer REST-Endpunkt, Wiedereroeffnung, Runde, Administration,
+Render-Aenderung, Migration, Commit oder Push. Nur fiktive Daten in isolierten
+PostgreSQL-17-Testcontainern; keine Verwendung von inventur_dev oder Unternehmensdaten.
+Keine offenen Implementierungspunkte innerhalb dieses Lernschritts.
+Eine spaetere API-/Android-Anbindung und ein etwaiger historischer Reparaturprozess
+sind eigenstaendige Aufgaben und hier nicht implementiert.
+
+## Vorheriger Stand: Lernschritt 30 – ausdruecklicher Zaehlblattabschluss
+
+`ZaehlblattAbschlussService.abschliessen(GepruefterUrheber, ZaehlblattAbschlussRequest)`
+schliesst genau ein Blatt intern ab. Der Urheber muss aus einer vertrauenswuerdig
+authentifizierten internen Quelle stammen, beispielsweise dem geprueften
+InventurPrincipal; eine frei angegebene Benutzer-ID darf nicht weitergereicht werden.
+Es gibt keinen neuen REST-Endpunkt und keine Android-Anbindung.
+
+### Fachliches Verhalten und Lernbegleitung
+
+1. Ein vollstaendig gezaehltes Blatt bleibt OFFEN, bis der Zaehler seinen Abschluss
+   ausdruecklich bestaetigt. Vollstaendigkeit allein bedeutet nicht, dass die Arbeit
+   fachlich beendet oder kontrolliert ist (BL-009).
+2. Ein unvollstaendiges Blatt darf nach einer Warnung bewusst abgeschlossen werden,
+   etwa wenn eine Position nicht geklaert werden kann. Dafuer muessen sowohl
+   `abschlussBestaetigt` als auch `unvollstaendigBestaetigt` wahr sein (BL-010).
+   Die Warnanzeige ist spaetere Clientaufgabe; der Server erzwingt die Zustimmung.
+3. `null` bedeutet ungezaehlt, `0` bedeutet ausdruecklich gezaehlt: Der Zaehler hat
+   keinen Bestand vorgefunden. Ein LEFT JOIN von Positionen zu Ergebnissen zaehlt
+   auch Positionen ohne gespeicherte Ergebniszeile korrekt als ungezaehlt.
+   Keine Mengen werden beim Abschluss ergaenzt oder veraendert.
+4. Der Abschluss hat eine eigene Request-ID, weil er eine eigene fachliche Absicht
+   darstellt. Bei verlorener Antwort klaert derselbe unveraenderte Request, ob der
+   Server bereits abgeschlossen hat; er darf die Statusversion nicht zweimal erhoehen.
+5. Erwartete Blatt- und Sitzungsstatusversionen verhindern Entscheidungen auf Basis
+   eines inzwischen geaenderten Zustands. Die Zuweisungsversion schuetzt zusaetzlich
+   gegen zwischenzeitliche Neuzuweisung derselben Liste.
+6. Blatt- und Sitzungsabschluss haengen zusammen: Spaeter soll der letzte bestaetigte
+   Blattabschluss die Sitzung in derselben Transaktion automatisch schliessen
+   (BL-011). Es ist kein separater Gesamtabschluss-Request vorgesehen.
+7. Registrierung, Blattstatus, Version, Zeit, Benutzer, Requestreferenz und
+   wiederholbare Antwort gehoeren in eine Transaktion. Ein Fehler muss alles
+   zurueckrollen; andernfalls koennte ein geschlossenes Blatt ohne bestaetigten
+   Request oder eine Erfolgsantwort ohne geschlossenes Blatt entstehen.
+
+Ein lokal vorgemerkter Abschluss ist keine Serverbestaetigung. Endgueltig bestaetigt
+ist ausschliesslich das Ergebnis nach erfolgreichem Commit. Eine verlorene
+Verbindung bleibt fuer den Aufrufer ungewiss und wird durch identisches Replay
+geklaert. Eine Ablehnung ohne gespeicherte Entscheidung ist kein Abschluss.
+
+### Internes Request- und Antwortformat
+
+Der Request enthaelt Request-ID, Formatversion 1, Listen-/Sitzungs-/Blatt-ID,
+Zuweisungsversion, erwartete Sitzungs-/Blattstatusversion und beide ausdruecklichen
+Bestaetigungen. Alle Felder sind erforderlich, die Bestaetigungen sind boolesch.
+Die separate Identitaet ist kein Bestandteil des vom Client gelieferten Inhalts.
+
+Das kanonische JSON fuer BLATT_ABSCHLIESSEN v1 besitzt genau diese Feldreihenfolge:
+`formatVersion`, `operation`, `requestId`, `zaehlerlisteId`, `zaehlsitzungId`,
+`zaehlblattId`, `zuweisungVersion`, `erwarteteSitzungStatusVersion`,
+`erwarteteBlattStatusVersion`, `abschlussBestaetigt`, `unvollstaendigBestaetigt`.
+UUIDs erscheinen kleingeschrieben mit Bindestrichen; Ganzzahlen und Booleans sind
+JSON-Werte, kein Whitespace wird ergaenzt. SHA-256 ueber den UTF-8-Text liefert
+64 kleingeschriebene Hexzeichen. Das bestehende Ergebnisformat v1 bleibt erhalten.
+Beide Operationen verwenden denselben Normalisierer, Hashalgorithmus,
+Registrierungsservice und Wiederholungsservice ueber `SyncRequestInhalt`.
+
+Die Erfolgsantwort enthaelt `requestId`, `zaehlblattId`,
+`entscheidung=AKZEPTIERT`, `blattStatus=ABGESCHLOSSEN`, `blattStatusVersion`,
+`ungezaehltePositionen` und `abgeschlossenAm`. Der bestehende interne
+Ergebniscontainer `ErgebnisSpeicherergebnis` traegt Entscheidung, exakten JSON-Text
+und Replaykennzeichen. Sein HTTP-Statuswert 200 ist gespeicherte Metainformation
+des bestehenden Idempotenzmodells; dadurch entsteht kein HTTP-Endpunkt.
+
+### Transaktion, Idempotenz und Sperren
+
+1. Syntax normalisieren und bekannte globale Request-ID vor neuer fachlicher
+   Berechtigungspruefung erkennen. Zuerst den Urheber vergleichen: Fremde erhalten
+   keine Entscheidung und keine Inhaltsauskunft. Anderer Inhalt derselben UUID
+   liefert REQUEST_ID_REUSED, auch operationsuebergreifend.
+2. Neue Requests sperren in der Reihenfolge Benutzer FOR SHARE, Liste FOR SHARE,
+   Sitzung FOR UPDATE, Blatt FOR UPDATE. Der vorhandene ErgebnisBerechtigungsPruefer
+   teilt Benutzer-/Rollen-/Listen-/Zuweisungspruefung mit Ergebnisspeichern.
+   Hierarchie, OFFEN-Status und beide Statusversionen werden unter diesen Sperren
+   erneut aus PostgreSQL gelesen, unabhaengig vom JPA-Entity-Cache.
+3. Direkt exklusive Sitzungs-/Blattsperren erwerben, keine SHARE-Sperre spaeter
+   hochstufen. Die Sitzungssperre serialisiert auch Abschluesse verschiedener Blaetter
+   und ist fuer den spaeteren Sitzungsabschluss vorbereitet.
+   ErgebnisSpeichern haelt seine Sitzungs-/Blatt-SHARE-Sperren bis Commit:
+   Entweder wird die Ergebnisaenderung zuerst sichtbar und mitgezaehlt, oder sie
+   prueft anschliessend das geschlossene Blatt und darf keine Menge mehr aendern.
+4. Nach Sperrwartezeiten die Request-ID erneut pruefen. Erst dann Vollstaendigkeit
+   und Bestaetigungen pruefen und die ID per bestehendem INSERT ON CONFLICT atomar
+   registrieren. Unberechtigte/ungueltige neue Abschluesse reservieren keine ID und
+   erzeugen in diesem Lernschritt kein Konfliktarchiv.
+5. Blatt auf ABGESCHLOSSEN setzen, Statusversion exakt um eins erhoehen,
+   PostgreSQL-Serverzeit, schliessenden Benutzer und letzter_status_request_id
+   speichern. V7 sichert bereits die passende Blattreferenz per zusammengesetztem FK.
+6. Exakten Antworttext und AKZEPTIERT in sync_request speichern.
+   Der vorhandene beforeCommit-Guard verhindert unfertige Registrierungen.
+   TransactionTemplate mit READ_COMMITTED committet vor Rueckgabe;
+   Propagation.NEVER verhindert einen Aufruf innerhalb einer fremden Transaktion.
+
+Identische Wiederholungen liefern exakt die gespeicherte Entscheidung, auch nach
+Rollenwechsel, Neuzuweisung oder spaeterer Sitzungsschliessung. Die Authentifizierung
+und Uebergabe einer vertrauenswuerdigen Identitaet bleiben Aufgabe des Aufrufers.
+Eine Wiederholung fuehrt weder Berechtigungs-Neuinterpretation noch Statusaenderung aus.
+
+Die Listen-SHARE-Sperre haelt eine konkurrierende Neuzuweisung bis zum Commit auf.
+Commit einer Neuzuweisung vor der Abschlusspruefung fuehrt zur Ablehnung.
+Kuenftige Neuzuweisungsdienste muessen dieselbe Reihenfolge einhalten:
+Benutzer vor Liste vor Kindressourcen. Insbesondere duerfen sie nicht erst eine
+Sitzung oder ein Blatt und danach die Liste sperren. Es wird hier kein solcher
+Administrationsdienst implementiert. Positions-/Ergebnis-Sperren benoetigt der
+Abschluss nicht zusaetzlich, weil alle Ergebnisdienste vorher Sitzung/Blatt sperren.
+
+### Bewusster Zwischenstand und Grenzen
+
+Auch wenn bereits alle Blaetter ABGESCHLOSSEN sind, bleibt die Sitzung noch OFFEN,
+mit unveraenderter Statusversion und ohne Abschlusszeitpunkt. Der Service bestaetigt
+ausschliesslich den Blattabschluss. Die Einfuegestelle fuer den spaeteren automatischen
+Sitzungsabschluss ist im Service innerhalb derselben Transaktion dokumentiert.
+
+Keine Wiedereroeffnung, neue Runde, Administration, Render-Aenderung, neue Migration
+oder Aenderung an V1 bis V9. Tests verwenden nur fiktive Daten in wegwerfbaren
+PostgreSQL-17-Testcontainern, nicht inventur_dev oder Unternehmensdaten.
+
+### Geaenderte Dateien und Validierung
+
+Neu unter src/main/java/de/pia/inventur/backend:
+
+- service/sync/SyncRequestInhalt.java
+- service/sync/ZaehlblattAbschlussRequest.java
+- service/sync/ZaehlblattAbschlussAntwort.java
+- service/sync/ZaehlblattAbschlussService.java
+- repository/ZaehlblattAbschlussRepository.java
+
+Angepasst unter demselben Quellverzeichnis:
+
+- service/sync/ErgebnisSpeichernInhalt.java
+- service/sync/ErgebnisRequestNormalisierer.java
+- service/sync/ErgebnisBerechtigungsPruefer.java
+- service/sync/RequestRegistrierungsService.java
+- service/sync/RequestWiederholungsService.java
+- repository/SyncRequestsRepository.java
+- repository/ErgebnisPruefRepository.java
+- entity/ZaehlblattEntity.java (veralteten FK-Kommentar korrigiert)
+
+Neu unter src/test:
+
+- java/de/pia/inventur/backend/ZaehlblattAbschlussIntegrationTests.java
+- java/de/pia/inventur/backend/ZaehlblattAbschlussNormalisiererTests.java
+- resources/cleanup-abschluss.sql (loest ausschliesslich den eigenen Test-FK)
+
+Zusaetzlich angepasst: diese README und die Projekt-README.
+
+43 neue PostgreSQL-Integrationstests und 10 Protokolltests pruefen die Abschlussregeln,
+NULL/0/fehlende Ergebniszeilen, Berechtigung und Hierarchie, Versionen, gespeicherte
+Antwort und Requestreferenz, Replay, globale ID-Kollisionen, echte PostgreSQL-
+Sperrwartezeiten in getrennten Transaktionen, beide Reihenfolgen von Ergebnis-
+aenderung/Abschluss und Neuzuweisung/Abschluss sowie atomare Rollbacks und den
+Commit-Guard. Ein unabhaengig berechneter SHA-256-Testvektor fixiert das Protokoll.
+
+Abschliessender Maven-package-Build am 15.10.2026: 474 Tests erfolgreich (421 bisherige
+und 53 neue), keine Fehler, Fehlschlaege oder uebersprungenen Tests; BUILD SUCCESS.
+Migrationen V1 bis V9 und Android sind unveraendert. Keine Commits oder Pushes.
+
+Empfohlener naechster Lernschritt: automatischen Sitzungsabschluss beim letzten
+serverseitig abgeschlossenen Blatt in dieselbe Transaktion integrieren und
+insbesondere parallele Abschluesse verschiedener Blaetter pruefen.
+
+## Vorheriger Stand: Lernschritt 29
 
 Der vorhandene PUT-Endpunkt archiviert jetzt geeignete Offline-Konflikte dauerhaft.
 Es gibt keine neue Route und keine neue Migration. Die JSON-Antwort erfolgreicher

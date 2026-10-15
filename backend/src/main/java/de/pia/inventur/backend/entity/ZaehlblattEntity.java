@@ -45,7 +45,7 @@ public class ZaehlblattEntity {
             foreignKey = @ForeignKey(name = "fk_zaehlblatt_geschlossen_von"))
     private BenutzerEntity geschlossenVon;
 
-    // Spaeter durch eine eigene Migration mit sync_request verknuepfen.
+    // V7 verknuepft Request-ID und Blatt-ID gemeinsam durch einen Fremdschluessel.
     @Column(name = "letzter_status_request_id")
     private UUID letzterStatusRequestId;
 

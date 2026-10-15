@@ -12,9 +12,10 @@
   Eine Mock-Bestaetigung ist KEINE Bestaetigung des Spring-Boot-Servers.
 - Backend: Java 21, Spring Boot 4.1.1, PostgreSQL 17, Flyway V1 bis V9,
   elf fachliche Tabellen, JWT-Pruefung, datensatzbezogene Autorisierung,
-  idempotentes Ergebnisspeichern und dauerhafte Konfliktarchivierung.
+  idempotentes Ergebnisspeichern, dauerhafte Konfliktarchivierung und interner
+  ausdruecklicher Zaehlblattabschluss mit automatischem Sitzungsabschluss (Lernschritt 31).
 - Noch offen: echte OIDC-Anbieter-/Benutzereinrichtung, Android-Anbindung,
-  Konfliktbearbeitung, Neuzuweisungs-, Blattabschluss- und Rundenstartablaeufe,
+  Konfliktbearbeitung, Neuzuweisung, Abschluss-API und Rundenstartablaeufe,
   produktive Bereitstellung. Keine ungesicherte Zwischenloesung verwenden.
 
 Die Android-App und das Maven-Backend sind getrennte Projekte. Sie teilen

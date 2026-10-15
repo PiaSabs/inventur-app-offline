@@ -45,6 +45,18 @@ public class ErgebnisPruefRepository {
                         ZaehlblattStatus.valueOf(row.getString("status")), row.getLong("status_version")), id);
     }
 
+    public Optional<SitzungsStand> sperreSitzungZumAbschluss(UUID id) {
+        return eins("SELECT zaehlerliste_id, status, status_version FROM zaehlsitzung WHERE id=? FOR UPDATE",
+                (row, number) -> new SitzungsStand(row.getObject("zaehlerliste_id", UUID.class),
+                        ZaehlsitzungStatus.valueOf(row.getString("status")), row.getLong("status_version")), id);
+    }
+
+    public Optional<BlattStand> sperreBlattZumAbschluss(UUID id) {
+        return eins("SELECT zaehlsitzung_id, status, status_version FROM zaehlblatt WHERE id=? FOR UPDATE",
+                (row, number) -> new BlattStand(row.getObject("zaehlsitzung_id", UUID.class),
+                        ZaehlblattStatus.valueOf(row.getString("status")), row.getLong("status_version")), id);
+    }
+
     public Optional<PositionsStand> sperrePosition(UUID id) {
         return eins("SELECT zaehlblatt_id FROM zaehlposition WHERE id=? FOR UPDATE",
                 (row, number) -> new PositionsStand(row.getObject("zaehlblatt_id", UUID.class)), id);

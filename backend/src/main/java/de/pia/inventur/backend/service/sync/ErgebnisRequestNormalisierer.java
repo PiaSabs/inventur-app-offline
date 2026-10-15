@@ -27,7 +27,40 @@ public final class ErgebnisRequestNormalisierer {
             .enable(JsonWriteFeature.WRITE_HEX_UPPER_CASE)
             .build();
 
-    public NormalisierterRequest normalisiere(ErgebnisSpeichernInhalt inhalt) {
+    public NormalisierterRequest normalisiere(SyncRequestInhalt inhalt) {
+        if (inhalt instanceof ZaehlblattAbschlussRequest r) return normalisiereAbschluss(r);
+        return normalisiereErgebnis((ErgebnisSpeichernInhalt) inhalt);
+    }
+
+    private NormalisierterRequest normalisiereAbschluss(ZaehlblattAbschlussRequest r) {
+        erforderlich(r.requestId(), "requestId");
+        if (!Integer.valueOf(FORMAT_VERSION).equals(r.formatVersion()))
+            throw new IllegalArgumentException("Nur Inhaltsformatversion 1 wird unterstuetzt");
+        erforderlich(r.zaehlerlisteId(), "zaehlerlisteId");
+        erforderlich(r.zaehlsitzungId(), "zaehlsitzungId");
+        erforderlich(r.zaehlblattId(), "zaehlblattId");
+        mindestens(r.zuweisungVersion(), 0, "zuweisungVersion");
+        mindestens(r.erwarteteSitzungStatusVersion(), 1, "erwarteteSitzungStatusVersion");
+        mindestens(r.erwarteteBlattStatusVersion(), 1, "erwarteteBlattStatusVersion");
+        erforderlich(r.abschlussBestaetigt(), "abschlussBestaetigt");
+        erforderlich(r.unvollstaendigBestaetigt(), "unvollstaendigBestaetigt");
+        // Reihenfolge ist Bestandteil des kanonischen Formats fuer BLATT_ABSCHLIESSEN v1.
+        var felder = new LinkedHashMap<String, Object>();
+        felder.put("formatVersion", FORMAT_VERSION);
+        felder.put("operation", r.operation().name());
+        felder.put("requestId", r.requestId().toString());
+        felder.put("zaehlerlisteId", r.zaehlerlisteId().toString());
+        felder.put("zaehlsitzungId", r.zaehlsitzungId().toString());
+        felder.put("zaehlblattId", r.zaehlblattId().toString());
+        felder.put("zuweisungVersion", r.zuweisungVersion());
+        felder.put("erwarteteSitzungStatusVersion", r.erwarteteSitzungStatusVersion());
+        felder.put("erwarteteBlattStatusVersion", r.erwarteteBlattStatusVersion());
+        felder.put("abschlussBestaetigt", r.abschlussBestaetigt());
+        felder.put("unvollstaendigBestaetigt", r.unvollstaendigBestaetigt());
+        return kanonisiere(felder);
+    }
+
+    private NormalisierterRequest normalisiereErgebnis(ErgebnisSpeichernInhalt inhalt) {
         erforderlich(inhalt, "inhalt");
         erforderlich(inhalt.formatVersion(), "formatVersion");
         if (inhalt.formatVersion() != FORMAT_VERSION) {
@@ -65,6 +98,10 @@ public final class ErgebnisRequestNormalisierer {
         felder.put("erwarteteSitzungStatusVersion", inhalt.erwarteteSitzungStatusVersion());
         felder.put("zaehlmenge", inhalt.zaehlmenge());
         felder.put("anmerkung", inhalt.anmerkung());
+        return kanonisiere(felder);
+    }
+
+    private NormalisierterRequest kanonisiere(LinkedHashMap<String, Object> felder) {
         String kanonisch = mapper.writeValueAsString(felder);
         try {
             byte[] digest = MessageDigest.getInstance("SHA-256")

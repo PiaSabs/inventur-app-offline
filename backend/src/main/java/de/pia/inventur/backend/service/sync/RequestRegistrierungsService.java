@@ -26,7 +26,7 @@ public class RequestRegistrierungsService {
 
     @Transactional(propagation = Propagation.MANDATORY)
     public RequestRegistrierungsergebnis registriere(UUID requestId, GepruefterUrheber urheber,
-            ErgebnisSpeichernInhalt inhalt) {
+            SyncRequestInhalt inhalt) {
         if (!TransactionSynchronizationManager.isActualTransactionActive()
                 || !TransactionSynchronizationManager.isSynchronizationActive()
                 || TransactionSynchronizationManager.isCurrentTransactionReadOnly()) {

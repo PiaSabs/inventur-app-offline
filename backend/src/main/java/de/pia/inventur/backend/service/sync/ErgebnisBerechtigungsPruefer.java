@@ -40,15 +40,8 @@ public class ErgebnisBerechtigungsPruefer {
         } catch (IllegalArgumentException invalid) {
             return result(UNGUELTIGER_REQUEST);
         }
-        var benutzer = daten.sperreBenutzer(urheber.benutzerId());
-        if (benutzer.isEmpty()) return result(BENUTZER_NICHT_VORHANDEN);
-        if (!benutzer.orElseThrow().aktiv()) return result(BENUTZER_INAKTIV);
-        if (benutzer.orElseThrow().rolle() != BenutzerRolle.ZAEHLER) return result(FALSCHE_ROLLE);
-
-        var liste = daten.sperreListe(inhalt.zaehlerlisteId());
-        if (liste.isEmpty()) return result(ZIEL_NICHT_VORHANDEN);
-        if (!Objects.equals(liste.orElseThrow().zaehlerId(), urheber.benutzerId())) return result(LISTE_NICHT_ZUGEWIESEN);
-        if (liste.orElseThrow().zuweisungVersion() != inhalt.zuweisungVersion()) return result(ZUWEISUNG_GEAENDERT);
+        var zugriff = pruefeBenutzerUndListe(urheber, inhalt, true);
+        if (!zugriff.zulaessig()) return zugriff;
 
         var sitzung = daten.sperreSitzung(inhalt.zaehlsitzungId());
         if (sitzung.isEmpty()) return result(ZIEL_NICHT_VORHANDEN);
@@ -78,13 +71,8 @@ public class ErgebnisBerechtigungsPruefer {
                 || TransactionSynchronizationManager.isCurrentTransactionReadOnly()) {
             throw new IllegalStateException("Konfliktpruefung erfordert eine schreibfaehige Transaktion");
         }
-        var benutzer = daten.sperreBenutzer(urheber.benutzerId());
-        if (benutzer.isEmpty()) return result(BENUTZER_NICHT_VORHANDEN);
-        if (!benutzer.orElseThrow().aktiv()) return result(BENUTZER_INAKTIV);
-        if (benutzer.orElseThrow().rolle() != BenutzerRolle.ZAEHLER) return result(FALSCHE_ROLLE);
-        var liste = daten.sperreListe(inhalt.zaehlerlisteId());
-        if (liste.isEmpty()) return result(ZIEL_NICHT_VORHANDEN);
-        if (!Objects.equals(liste.orElseThrow().zaehlerId(), urheber.benutzerId())) return result(LISTE_NICHT_ZUGEWIESEN);
+        var zugriff = pruefeBenutzerUndListe(urheber, inhalt, false);
+        if (!zugriff.zulaessig()) return zugriff;
         var sitzung = daten.sperreSitzung(inhalt.zaehlsitzungId());
         if (sitzung.isEmpty()) return result(ZIEL_NICHT_VORHANDEN);
         if (!sitzung.orElseThrow().listeId().equals(inhalt.zaehlerlisteId())) return result(FALSCHE_ZUORDNUNG);
@@ -94,6 +82,25 @@ public class ErgebnisBerechtigungsPruefer {
         var position = daten.sperrePosition(inhalt.zaehlpositionId());
         if (position.isEmpty()) return result(ZIEL_NICHT_VORHANDEN);
         if (!position.orElseThrow().blattId().equals(inhalt.zaehlblattId())) return result(FALSCHE_ZUORDNUNG);
+        return result(ZULAESSIG);
+    }
+
+    /** Gemeinsame Autorisierung fuer neue Ergebnis- und Abschlussrequests unter denselben Sperren. */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public ErgebnisPruefergebnis pruefeBenutzerUndListe(GepruefterUrheber urheber, SyncRequestInhalt inhalt,
+            boolean pruefeZuweisungVersion) {
+        if (!TransactionSynchronizationManager.isActualTransactionActive()
+                || TransactionSynchronizationManager.isCurrentTransactionReadOnly())
+            throw new IllegalStateException("Pruefung erfordert eine schreibfaehige Transaktion");
+        var benutzer = daten.sperreBenutzer(urheber.benutzerId());
+        if (benutzer.isEmpty()) return result(BENUTZER_NICHT_VORHANDEN);
+        if (!benutzer.orElseThrow().aktiv()) return result(BENUTZER_INAKTIV);
+        if (benutzer.orElseThrow().rolle() != BenutzerRolle.ZAEHLER) return result(FALSCHE_ROLLE);
+        var liste = daten.sperreListe(inhalt.zaehlerlisteId());
+        if (liste.isEmpty()) return result(ZIEL_NICHT_VORHANDEN);
+        if (!Objects.equals(liste.orElseThrow().zaehlerId(), urheber.benutzerId())) return result(LISTE_NICHT_ZUGEWIESEN);
+        if (pruefeZuweisungVersion && liste.orElseThrow().zuweisungVersion() != inhalt.zuweisungVersion())
+            return result(ZUWEISUNG_GEAENDERT);
         return result(ZULAESSIG);
     }
 
