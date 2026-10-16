@@ -29,10 +29,10 @@ public class ArtikelAdapterV2 extends RecyclerView.Adapter<ArtikelAdapterV2.Arti
     private String suchbegriff = "";
     private int filterModus = FILTER_ALLE;
 
-    private static final int FILTER_ALLE = 1;
-    private static final int FILTER_OFFEN = 2;
-    private static final int FILTER_GEZAEHLT = 3;
-    private static final int FILTER_UNTER_MINDESTBESTAND = 4;
+    private static final int FILTER_ALLE = ArtikelFilter.FILTER_ALLE;
+    private static final int FILTER_OFFEN = ArtikelFilter.FILTER_OFFEN;
+    private static final int FILTER_GEZAEHLT = ArtikelFilter.FILTER_GEZAEHLT;
+    private static final int FILTER_UNTER_MINDESTBESTAND = ArtikelFilter.FILTER_UNTER_MINDESTBESTAND;
 
     public ArtikelAdapterV2(List<Artikel> artikelListe, OnArtikelAusgewaehltListener onArtikelAusgewaehltListener) {
         this.artikelListe = artikelListe;
@@ -78,45 +78,19 @@ public class ArtikelAdapterV2 extends RecyclerView.Adapter<ArtikelAdapterV2.Arti
     }
 
     public void setSuchbegriff(String suchbegriff) {
-        this.suchbegriff = suchbegriff == null ? "" : suchbegriff.trim().toLowerCase();
+        this.suchbegriff = ArtikelFilter.normalisiereSuchbegriff(suchbegriff);
         aktualisiereSichtbareArtikel();
     }
 
     private void aktualisiereSichtbareArtikel() {
         sichtbareArtikel.clear();
         for (Artikel artikel : artikelListe) {
-            if (passtZumFilter(artikel) && passtZumSuchbegriff(artikel)) {
+            if (ArtikelFilter.passtZumFilter(artikel, filterModus)
+                    && ArtikelFilter.passtZumSuchbegriff(artikel, suchbegriff)) {
                 sichtbareArtikel.add(artikel);
             }
         }
         notifyDataSetChanged();
-    }
-
-    private boolean passtZumFilter(Artikel artikel) {
-        if (filterModus == FILTER_OFFEN) {
-            return !artikel.istGezaehlt();
-        }
-        if (filterModus == FILTER_GEZAEHLT) {
-            return artikel.istGezaehlt();
-        }
-        if (filterModus == FILTER_UNTER_MINDESTBESTAND) {
-            return artikel.istUnterMindestbestand();
-        }
-        return true;
-    }
-
-    private boolean passtZumSuchbegriff(Artikel artikel) {
-        if (suchbegriff.isEmpty()) {
-            return true;
-        }
-        return enthaeltSuchbegriff(artikel.getArtikelnummer())
-                || enthaeltSuchbegriff(artikel.getBezeichnung())
-                || enthaeltSuchbegriff(artikel.getLagerort())
-                || String.valueOf(artikel.getPositionsNummer()).contains(suchbegriff);
-    }
-
-    private boolean enthaeltSuchbegriff(String wert) {
-        return wert != null && wert.toLowerCase().contains(suchbegriff);
     }
 
     static class ArtikelViewHolder extends RecyclerView.ViewHolder {
