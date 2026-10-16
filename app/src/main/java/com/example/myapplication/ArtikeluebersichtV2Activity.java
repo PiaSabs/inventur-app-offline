@@ -938,36 +938,13 @@ public class ArtikeluebersichtV2Activity extends AppCompatActivity {
     }
 
     private int findeAktuellenBlattIndex(List<Zaehlerliste> zaehlerlisten) {
-        for (int index = 0; index < zaehlerlisten.size(); index++) {
-            if (zaehlerlisten.get(index).getId() == zaehlerlistenId) {
-                return index;
-            }
-        }
-        return -1;
+        return BlattAuswahl.findeBlattIndex(zaehlerlisten, zaehlerlistenId);
     }
 
     private List<Zaehlerliste> ermittleWochenBlattlistenFuerNavigation() {
-        List<Zaehlerliste> gefilterteZaehlerlisten = new ArrayList<>();
-        String zaehler = holeAktuellenZaehlerFilter();
-        String schreiber = holeAktuellenSchreiberFilter();
-        String bezeichnung = normalisiereText(ausgewaehlteZaehlerlistenBezeichnung);
-
-        for (Zaehlerliste zaehlerliste : verfuegbareZaehlerlisten) {
-            if (!"wo".equalsIgnoreCase(zaehlerliste.getZaehlTyp())) {
-                continue;
-            }
-            if (!bezeichnung.isEmpty() && !bezeichnung.equals(normalisiereText(zaehlerliste.getBezeichnung()))) {
-                continue;
-            }
-            if (!texteSindGleich(zaehler, zaehlerliste.getGespeicherterZaehlerName())) {
-                continue;
-            }
-            if (!texteSindGleich(schreiber, zaehlerliste.getGespeicherterSchreiberName())) {
-                continue;
-            }
-            gefilterteZaehlerlisten.add(zaehlerliste);
-        }
-        return gefilterteZaehlerlisten;
+        return BlattAuswahl.wochenBlaetter(verfuegbareZaehlerlisten,
+                holeAktuellenZaehlerFilter(), holeAktuellenSchreiberFilter(),
+                ausgewaehlteZaehlerlistenBezeichnung);
     }
 
     private String holeAktuellenZaehlerFilter() {
@@ -980,12 +957,8 @@ public class ArtikeluebersichtV2Activity extends AppCompatActivity {
         return schreiberEditText.getText() == null ? "" : schreiberEditText.getText().toString().trim();
     }
 
-    private boolean texteSindGleich(String links, String rechts) {
-        return normalisiereText(links).equals(normalisiereText(rechts));
-    }
-
     private String normalisiereText(String wert) {
-        return wert == null ? "" : wert.trim().toLowerCase(Locale.GERMANY);
+        return BlattAuswahl.normalisiereText(wert);
     }
 }
 
