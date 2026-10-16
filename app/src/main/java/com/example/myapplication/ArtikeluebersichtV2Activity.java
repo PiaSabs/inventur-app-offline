@@ -718,21 +718,7 @@ public class ArtikeluebersichtV2Activity extends AppCompatActivity {
     }
 
     private List<Artikel> erstelleArtikelSnapshot() {
-        List<Artikel> snapshot = new ArrayList<>();
-        for (Artikel artikel : artikelListe) {
-            snapshot.add(new Artikel(
-                    artikel.getPositionsNummer(),
-                    artikel.getArtikelnummer(),
-                    artikel.getBezeichnung(),
-                    artikel.getLagerort(),
-                    artikel.getIstMenge(),
-                    artikel.getLetzteZaehlmenge(),
-                    artikel.getMindestbestand(),
-                    artikel.getZaehlMenge(),
-                    artikel.getAnmerkung()
-            ));
-        }
-        return snapshot;
+        return ArtikelSnapshots.erstelle(artikelListe);
     }
 
     private void zeigeFilterMenue(android.view.View anchor) {
