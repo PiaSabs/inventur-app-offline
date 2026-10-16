@@ -11,7 +11,6 @@ import android.text.TextWatcher;
 import android.view.Menu;
 import android.view.View;
 import android.view.WindowManager;
-import android.view.inputmethod.InputMethodManager;
 import android.widget.EditText;
 import android.widget.ImageView;
 import android.widget.ImageButton;
@@ -413,49 +412,6 @@ public class ArtikeluebersichtV2Activity extends AppCompatActivity {
         String wert = editText.getText() == null ? "" : editText.getText().toString().trim();
         Integer zaehlMenge = leseGueltigeZaehlmenge(editText, wert);
         return zaehlMenge == null ? 0 : zaehlMenge;
-    }
-
-    private void scrollAktivenArtikelNachOben(int adapterPosition) {
-        if (artikelRecyclerView == null) {
-            return;
-        }
-        artikelRecyclerView.postDelayed(() -> {
-            RecyclerView.LayoutManager layoutManager = artikelRecyclerView.getLayoutManager();
-            if (layoutManager instanceof LinearLayoutManager) {
-                ((LinearLayoutManager) layoutManager).scrollToPositionWithOffset(adapterPosition, 0);
-            } else {
-                artikelRecyclerView.scrollToPosition(adapterPosition);
-            }
-        }, 120L);
-    }
-
-    private void fokussiereNaechstesArtikelFeld(int adapterPosition) {
-        if (artikelRecyclerView == null || artikelAdapter == null) {
-            return;
-        }
-        int naechstePosition = adapterPosition + 1;
-        if (naechstePosition >= artikelAdapter.getItemCount()) {
-            return;
-        }
-
-        scrollAktivenArtikelNachOben(naechstePosition);
-        artikelRecyclerView.postDelayed(() -> {
-            RecyclerView.ViewHolder viewHolder = artikelRecyclerView.findViewHolderForAdapterPosition(naechstePosition);
-            if (viewHolder == null) {
-                return;
-            }
-            EditText naechstesFeld = viewHolder.itemView.findViewById(R.id.zaehlMengeEditText);
-            if (naechstesFeld == null) {
-                return;
-            }
-            naechstesFeld.requestFocus();
-            naechstesFeld.setSelection(naechstesFeld.getText() == null ? 0 : naechstesFeld.getText().length());
-
-            InputMethodManager inputMethodManager = getSystemService(InputMethodManager.class);
-            if (inputMethodManager != null) {
-                inputMethodManager.showSoftInput(naechstesFeld, InputMethodManager.SHOW_IMPLICIT);
-            }
-        }, 220L);
     }
 
     private void aktualisiereLeereAnsicht() {
