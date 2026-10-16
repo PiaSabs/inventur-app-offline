@@ -284,6 +284,13 @@
             android:textSize="16sp"
             android:textStyle="bold" />
 
+        <Button
+            android:id="@+id/detailAbbrechenButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/anmerkung_dialog_abbrechen" />
+
     </LinearLayout>
 
 </ScrollView>

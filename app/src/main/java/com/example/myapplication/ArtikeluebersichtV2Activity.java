@@ -10,6 +10,7 @@ import android.text.InputType;
 import android.text.TextWatcher;
 import android.view.Menu;
 import android.view.View;
+import android.view.WindowManager;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.EditText;
 import android.widget.ImageView;
@@ -29,6 +30,7 @@ import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
 import com.google.android.material.bottomsheet.BottomSheetDialog;
+import com.google.android.material.bottomsheet.BottomSheetBehavior;
 
 import java.util.ArrayList;
 import java.text.SimpleDateFormat;
@@ -53,6 +55,7 @@ public class ArtikeluebersichtV2Activity extends AppCompatActivity {
     private static final long AUTO_SAVE_DELAY_MS = 1200L;
     private static final SimpleDateFormat STICHTAG_FORMAT = new SimpleDateFormat("dd.MM.yyyy", Locale.GERMANY);
 
+    private BottomSheetDialog artikelDetailDialog;
     private ArtikelRepository artikelRepository;
     private List<Artikel> artikelListe = new ArrayList<>();
     private ArtikelAdapterV2 artikelAdapter;
@@ -286,6 +289,10 @@ public class ArtikeluebersichtV2Activity extends AppCompatActivity {
     }
 
     private void oeffneArtikelDetailBottomSheet(Artikel artikel) {
+        if (artikelDetailDialog != null) {
+            EingabeDiagnose.ereignis("v2: mehrfaches Oeffnen verhindert");
+            return;
+        }
         if (istBearbeitungGesperrt()) {
             new AlertDialog.Builder(this)
                     .setTitle(R.string.artikel_bearbeitung_gesperrt_titel)
@@ -296,6 +303,20 @@ public class ArtikeluebersichtV2Activity extends AppCompatActivity {
         }
 
         BottomSheetDialog dialog = new BottomSheetDialog(this);
+        artikelDetailDialog = dialog;
+        dialog.setCanceledOnTouchOutside(false);
+        dialog.setOnCancelListener(d -> EingabeDiagnose.ereignis("v2: abgebrochen"));
+        dialog.setOnDismissListener(d -> {
+            EingabeDiagnose.ereignis("v2: geschlossen");
+            artikelDetailDialog = null;
+        });
+        dialog.setOnShowListener(d -> {
+            dialog.getBehavior().setSkipCollapsed(true);
+            dialog.getBehavior().setHideable(false);
+            dialog.getBehavior().setDraggable(false);
+            dialog.getBehavior().setState(BottomSheetBehavior.STATE_EXPANDED);
+            EingabeDiagnose.ereignis("v2: geoeffnet");
+        });
         View sheetView = getLayoutInflater().inflate(R.layout.bottom_sheet_artikel_v2, null);
         dialog.setContentView(sheetView);
         View bottomSheet = dialog.findViewById(com.google.android.material.R.id.design_bottom_sheet);
@@ -315,6 +336,7 @@ public class ArtikeluebersichtV2Activity extends AppCompatActivity {
         View minusButton = sheetView.findViewById(R.id.detailMinusButton);
         View plusButton = sheetView.findViewById(R.id.detailPlusButton);
         View speichernButton = sheetView.findViewById(R.id.detailSpeichernButton);
+        sheetView.findViewById(R.id.detailAbbrechenButton).setOnClickListener(v -> dialog.cancel());
 
         titleTextView.setText(artikel.getBezeichnung());
         subtitleTextView.setText(getString(
@@ -329,6 +351,9 @@ public class ArtikeluebersichtV2Activity extends AppCompatActivity {
         letzteZaehlungTextView.setText(formatiereMenge(artikel.getLetzteZaehlmenge()));
         zaehlMengeEditText.setText(artikel.getZaehlMenge() == null ? "" : String.valueOf(artikel.getZaehlMenge()));
         anmerkungEditText.setText(artikel.getAnmerkung());
+        zaehlMengeEditText.setOnFocusChangeListener((v, fokus) ->
+                EingabeDiagnose.ereignis(fokus ? "v2: Mengenfeld fokussiert" : "v2: Mengenfeld Fokus verloren"));
+        EingabeDiagnose.beobachteTastatur(sheetView, "v2");
 
         minusButton.setOnClickListener(v -> {
             int aktuellerWert = parseZaehlmenge(zaehlMengeEditText);
@@ -339,7 +364,7 @@ public class ArtikeluebersichtV2Activity extends AppCompatActivity {
 
         plusButton.setOnClickListener(v -> {
             int aktuellerWert = parseZaehlmenge(zaehlMengeEditText);
-            int neuerWert = aktuellerWert + 1;
+            int neuerWert = aktuellerWert == Integer.MAX_VALUE ? aktuellerWert : aktuellerWert + 1;
             zaehlMengeEditText.setText(String.valueOf(neuerWert));
             zaehlMengeEditText.setSelection(zaehlMengeEditText.getText().length());
         });
@@ -350,6 +375,7 @@ public class ArtikeluebersichtV2Activity extends AppCompatActivity {
             if (zaehlMenge == null && !mengeText.isEmpty()) {
                 return;
             }
+            EingabeDiagnose.ereignis("v2: bestaetigt");
             artikel.setZaehlMenge(zaehlMenge);
             artikel.setAnmerkung(anmerkungEditText.getText() == null ? "" : anmerkungEditText.getText().toString().trim());
             artikelAdapter.notifyDataSetChanged();
@@ -358,6 +384,7 @@ public class ArtikeluebersichtV2Activity extends AppCompatActivity {
             dialog.dismiss();
         });
 
+        dialog.getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
         dialog.show();
     }
 
@@ -562,6 +589,10 @@ public class ArtikeluebersichtV2Activity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
+        if (artikelDetailDialog != null) {
+            EingabeDiagnose.ereignis("v2: Activity beendet");
+            artikelDetailDialog.dismiss();
+        }
         super.onDestroy();
         autoSaveHandler.removeCallbacks(autoSaveRunnable);
         if (artikelRepository != null) {

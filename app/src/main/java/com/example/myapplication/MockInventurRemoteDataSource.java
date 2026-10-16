@@ -133,6 +133,23 @@ public class MockInventurRemoteDataSource implements InventurRemoteDataSource {
         artikelbestand.put(3, versand);
 
         artikelbestand.put(4, new ArrayList<>());
+        for (Map.Entry<Integer, List<ArtikelDto>> eintrag : artikelbestand.entrySet()) {
+            List<ArtikelDto> positionen = new ArrayList<>();
+            for (ArtikelDto artikel : eintrag.getValue()) {
+                positionen.add(new ArtikelDto(positionen.size() + 1, artikel.getArtikelnummer(),
+                        artikel.getBezeichnung(), "Demo-Regal 1", artikel.getIstMenge(),
+                        artikel.getMindestbestand(), artikel.getZaehlMenge()));
+            }
+            while (positionen.size() < 25) {
+                int position = positionen.size() + 1;
+                Integer menge = position % 3 == 0 ? null : (position % 3 == 1 ? 0 : 12);
+                positionen.add(new ArtikelDto(position,
+                        String.format(java.util.Locale.ROOT, "DEMO-%02d-%03d", eintrag.getKey(), position),
+                        "Demo-Testartikel " + eintrag.getKey() + " / " + position,
+                        "Demo-Regal " + ((position - 1) / 5 + 1), 30 + position, 5, menge));
+            }
+            eintrag.setValue(positionen);
+        }
         return artikelbestand;
     }
 
@@ -151,11 +168,15 @@ public class MockInventurRemoteDataSource implements InventurRemoteDataSource {
         for (ArtikelDto artikelDto : vorhandeneArtikel) {
             Integer gespeicherteZaehlMenge = zaehlmengenNachArtikelnummer.get(artikelDto.getArtikelnummer());
             aktualisierteArtikel.add(new ArtikelDto(
+                    artikelDto.getPositionsNummer(),
                     artikelDto.getArtikelnummer(),
                     artikelDto.getBezeichnung(),
+                    artikelDto.getLagerort(),
                     artikelDto.getIstMenge(),
+                    artikelDto.getLetzteZaehlmenge(),
                     artikelDto.getMindestbestand(),
-                    gespeicherteZaehlMenge
+                    gespeicherteZaehlMenge,
+                    artikelDto.getAnmerkung()
             ));
         }
 

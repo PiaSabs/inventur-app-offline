@@ -9,7 +9,6 @@ import android.text.InputType;
 import android.text.TextWatcher;
 import android.view.Menu;
 import android.view.View;
-import android.view.inputmethod.InputMethodManager;
 import android.widget.EditText;
 import android.widget.ImageView;
 import android.widget.ImageButton;
@@ -50,6 +49,7 @@ public class ArtikeluebersichtActivity extends AppCompatActivity {
     private static final long AUTO_SAVE_DELAY_MS = 1200L;
     private static final SimpleDateFormat STICHTAG_FORMAT = new SimpleDateFormat("dd.MM.yyyy", Locale.GERMANY);
 
+    private final MengeneingabeDialog mengeneingabeDialog = new MengeneingabeDialog();
     private ArtikelRepository artikelRepository;
     private List<Artikel> artikelListe = new ArrayList<>();
     private ArtikelAdapter artikelAdapter;
@@ -286,49 +286,6 @@ public class ArtikeluebersichtActivity extends AppCompatActivity {
         }
     }
 
-    private void scrollAktivenArtikelNachOben(int adapterPosition) {
-        if (artikelRecyclerView == null) {
-            return;
-        }
-        artikelRecyclerView.postDelayed(() -> {
-            RecyclerView.LayoutManager layoutManager = artikelRecyclerView.getLayoutManager();
-            if (layoutManager instanceof LinearLayoutManager) {
-                ((LinearLayoutManager) layoutManager).scrollToPositionWithOffset(adapterPosition, 0);
-            } else {
-                artikelRecyclerView.scrollToPosition(adapterPosition);
-            }
-        }, 120L);
-    }
-
-    private void fokussiereNaechstesArtikelFeld(int adapterPosition) {
-        if (artikelRecyclerView == null || artikelAdapter == null) {
-            return;
-        }
-        int naechstePosition = adapterPosition + 1;
-        if (naechstePosition >= artikelAdapter.getItemCount()) {
-            return;
-        }
-
-        scrollAktivenArtikelNachOben(naechstePosition);
-        artikelRecyclerView.postDelayed(() -> {
-            RecyclerView.ViewHolder viewHolder = artikelRecyclerView.findViewHolderForAdapterPosition(naechstePosition);
-            if (viewHolder == null) {
-                return;
-            }
-            EditText naechstesFeld = viewHolder.itemView.findViewById(R.id.zaehlMengeEditText);
-            if (naechstesFeld == null) {
-                return;
-            }
-            naechstesFeld.requestFocus();
-            naechstesFeld.setSelection(naechstesFeld.getText() == null ? 0 : naechstesFeld.getText().length());
-
-            InputMethodManager inputMethodManager = getSystemService(InputMethodManager.class);
-            if (inputMethodManager != null) {
-                inputMethodManager.showSoftInput(naechstesFeld, InputMethodManager.SHOW_IMPLICIT);
-            }
-        }, 220L);
-    }
-
     private void aktualisiereLeereAnsicht() {
         TextView leerstandTextView = findViewById(R.id.leerstandTextView);
         RecyclerView artikelRecyclerView = findViewById(R.id.artikelRecyclerView);
@@ -460,6 +417,7 @@ public class ArtikeluebersichtActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
+        mengeneingabeDialog.schliesse();
         super.onDestroy();
         autoSaveHandler.removeCallbacks(autoSaveRunnable);
         if (artikelRepository != null) {
@@ -737,13 +695,11 @@ public class ArtikeluebersichtActivity extends AppCompatActivity {
             }
 
             @Override
-            public void onArtikelFokusAngefordert(int adapterPosition) {
-                scrollAktivenArtikelNachOben(adapterPosition);
-            }
-
-            @Override
-            public void onNaechstesArtikelFeldAngefordert(int adapterPosition) {
-                fokussiereNaechstesArtikelFeld(adapterPosition);
+            public void onMengeBearbeiten(Artikel artikel) {
+                mengeneingabeDialog.zeige(ArtikeluebersichtActivity.this, artikel, () -> {
+                    artikelAdapter.notifyDataSetChanged();
+                    verarbeiteArtikelAenderung();
+                });
             }
         });
         artikelRecyclerView.setAdapter(artikelAdapter);

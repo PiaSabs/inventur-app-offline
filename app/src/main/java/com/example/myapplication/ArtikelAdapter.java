@@ -2,13 +2,9 @@ package com.example.myapplication;
 
 import android.content.Context;
 import android.text.InputType;
-import android.text.Editable;
-import android.text.TextWatcher;
-import android.view.KeyEvent;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
-import android.view.inputmethod.EditorInfo;
 import android.widget.EditText;
 import android.widget.TextView;
 
@@ -29,9 +25,7 @@ public class ArtikelAdapter extends RecyclerView.Adapter<ArtikelAdapter.ArtikelV
     public interface OnArtikelInteraktionListener {
         void onArtikelStatusChanged();
 
-        void onArtikelFokusAngefordert(int adapterPosition);
-
-        void onNaechstesArtikelFeldAngefordert(int adapterPosition);
+        void onMengeBearbeiten(Artikel artikel);
     }
 
     private final List<Artikel> artikelListe;
@@ -152,7 +146,6 @@ public class ArtikelAdapter extends RecyclerView.Adapter<ArtikelAdapter.ArtikelV
         private final TextView mindestbestandTextView;
         private final TextView zaehlstatusTextView;
         private final EditText zaehlMengeEditText;
-        private TextWatcher zaehlMengeTextWatcher;
 
         ArtikelViewHolder(@NonNull View itemView) {
             super(itemView);
@@ -188,63 +181,15 @@ public class ArtikelAdapter extends RecyclerView.Adapter<ArtikelAdapter.ArtikelV
             mindestbestandTextView.setText(String.valueOf(artikel.getMindestbestand()));
             aktualisiereAnmerkungButton(artikel);
 
-            if (zaehlMengeTextWatcher != null) {
-                zaehlMengeEditText.removeTextChangedListener(zaehlMengeTextWatcher);
-            }
-
             Integer zaehlMenge = artikel.getZaehlMenge();
             zaehlMengeEditText.setText(zaehlMenge == null ? "" : String.valueOf(zaehlMenge));
-
-            zaehlMengeTextWatcher = new TextWatcher() {
-                @Override
-                public void beforeTextChanged(CharSequence s, int start, int count, int after) {
-                }
-
-                @Override
-                public void onTextChanged(CharSequence s, int start, int before, int count) {
-                }
-
-                @Override
-                public void afterTextChanged(Editable editable) {
-                    String eingabe = editable.toString().trim();
-                    if (eingabe.isEmpty()) {
-                        artikel.setZaehlMenge(null);
-                    } else {
-                        try {
-                            int zaehlMenge = Integer.parseInt(eingabe);
-                            artikel.setZaehlMenge(Math.max(0, zaehlMenge));
-                        } catch (NumberFormatException exception) {
-                            artikel.setZaehlMenge(null);
-                            zaehlMengeEditText.setError(itemView.getContext().getString(R.string.zaehlmenge_ungueltig));
-                        }
-                    }
-                    aktualisiereKartenrahmen(artikel);
-                    onArtikelInteraktionListener.onArtikelStatusChanged();
-                }
-            };
-            zaehlMengeEditText.addTextChangedListener(zaehlMengeTextWatcher);
             zaehlMengeEditText.setEnabled(bearbeitungErlaubt);
-            zaehlMengeEditText.setFocusable(bearbeitungErlaubt);
-            zaehlMengeEditText.setFocusableInTouchMode(bearbeitungErlaubt);
+            zaehlMengeEditText.setFocusable(false);
+            zaehlMengeEditText.setFocusableInTouchMode(false);
             zaehlMengeEditText.setAlpha(bearbeitungErlaubt ? 1f : 0.55f);
+            zaehlMengeEditText.setOnClickListener(v -> onArtikelInteraktionListener.onMengeBearbeiten(artikel));
             anmerkungButton.setEnabled(bearbeitungErlaubt);
             anmerkungButton.setAlpha(bearbeitungErlaubt ? 1f : 0.55f);
-            zaehlMengeEditText.setOnFocusChangeListener((v, hasFocus) -> {
-                if (hasFocus) {
-                    meldeAktivenArtikelAn(onArtikelInteraktionListener);
-                }
-            });
-            zaehlMengeEditText.setOnClickListener(v -> meldeAktivenArtikelAn(onArtikelInteraktionListener));
-            zaehlMengeEditText.setOnEditorActionListener((v, actionId, event) -> {
-                boolean istEnterTaste = event != null
-                        && event.getAction() == KeyEvent.ACTION_DOWN
-                        && event.getKeyCode() == KeyEvent.KEYCODE_ENTER;
-                if (actionId == EditorInfo.IME_ACTION_NEXT || actionId == EditorInfo.IME_ACTION_DONE || istEnterTaste) {
-                    meldeNaechstesFeldAn(onArtikelInteraktionListener);
-                    return true;
-                }
-                return false;
-            });
             anmerkungButton.setOnClickListener(v -> {
                 if (bearbeitungErlaubt) {
                     oeffneAnmerkungsDialog(artikel, onArtikelInteraktionListener);
@@ -278,20 +223,6 @@ public class ArtikelAdapter extends RecyclerView.Adapter<ArtikelAdapter.ArtikelV
                     })
                     .setNegativeButton(R.string.anmerkung_dialog_abbrechen, (dialog, which) -> dialog.dismiss())
                     .show();
-        }
-
-        private void meldeAktivenArtikelAn(OnArtikelInteraktionListener onArtikelInteraktionListener) {
-            int adapterPosition = getBindingAdapterPosition();
-            if (adapterPosition != RecyclerView.NO_POSITION) {
-                onArtikelInteraktionListener.onArtikelFokusAngefordert(adapterPosition);
-            }
-        }
-
-        private void meldeNaechstesFeldAn(OnArtikelInteraktionListener onArtikelInteraktionListener) {
-            int adapterPosition = getBindingAdapterPosition();
-            if (adapterPosition != RecyclerView.NO_POSITION) {
-                onArtikelInteraktionListener.onNaechstesArtikelFeldAngefordert(adapterPosition);
-            }
         }
 
         private void aktualisiereAnmerkungButton(Artikel artikel) {

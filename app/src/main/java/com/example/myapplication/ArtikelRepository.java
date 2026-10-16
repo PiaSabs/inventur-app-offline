@@ -251,6 +251,16 @@ public class ArtikelRepository {
         }
 
         if (!apiModusAktiv && hatLokaleZaehlerlisten) {
+            if (remoteDataSource instanceof MockInventurRemoteDataSource) {
+                MockInventurRemoteDataSource demo = (MockInventurRemoteDataSource) remoteDataSource;
+                for (ZaehlerlisteDto demoListe : demo.ladeZaehlerlisten()) {
+                    Zaehlerliste lokal = lokalerInventurSpeicher.ladeZaehlerlisteFuerId(demoListe.getId());
+                    if (lokal != null && demoListe.getBezeichnung().equals(lokal.getBezeichnung())) {
+                        lokalerInventurSpeicher.ergaenzeDemoArtikel(demoListe.getId(),
+                                demo.ladeArtikel(demoListe.getId()));
+                    }
+                }
+            }
             return;
         }
 

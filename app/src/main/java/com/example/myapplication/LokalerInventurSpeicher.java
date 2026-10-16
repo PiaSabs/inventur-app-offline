@@ -341,6 +341,50 @@ public class LokalerInventurSpeicher extends SQLiteOpenHelper {
         }
     }
 
+    // Ausschliesslich vom lokalen Mock-Pfad aufgerufen. Vorhandene Zeilen nie ersetzen.
+    public synchronized void ergaenzeDemoArtikel(int listenId, List<ArtikelDto> demoArtikel) {
+        SQLiteDatabase db = getWritableDatabase();
+        db.beginTransaction();
+        try {
+            for (ArtikelDto artikel : demoArtikel) {
+                try (Cursor vorhanden = db.rawQuery("SELECT 1 FROM " + TABELLE_ARTIKEL
+                        + " WHERE zaehlerlisten_id = ? AND artikelnummer = ?",
+                        new String[]{String.valueOf(listenId), artikel.getArtikelnummer()})) {
+                    if (vorhanden.moveToFirst()) {
+                        continue;
+                    }
+                }
+                int position = artikel.getPositionsNummer();
+                try (Cursor belegt = db.rawQuery("SELECT 1 FROM " + TABELLE_ARTIKEL
+                        + " WHERE zaehlerlisten_id = ? AND pos_nr = ?",
+                        new String[]{String.valueOf(listenId), String.valueOf(position)})) {
+                    if (belegt.moveToFirst()) {
+                        try (Cursor maximum = db.rawQuery("SELECT MAX(pos_nr) FROM " + TABELLE_ARTIKEL
+                                + " WHERE zaehlerlisten_id = ?", new String[]{String.valueOf(listenId)})) {
+                            maximum.moveToFirst();
+                            position = maximum.getInt(0) + 1;
+                        }
+                    }
+                }
+                ContentValues values = new ContentValues();
+                values.put("zaehlerlisten_id", listenId);
+                values.put("pos_nr", position);
+                values.put("artikelnummer", artikel.getArtikelnummer());
+                values.put("bezeichnung", artikel.getBezeichnung());
+                values.put("lagerort", artikel.getLagerort());
+                values.put("ist_menge", artikel.getIstMenge());
+                values.put("mindestbestand", artikel.getMindestbestand());
+                values.put("zaehl_menge", artikel.getZaehlMenge());
+                values.put("letzte_zaehlmenge", artikel.getLetzteZaehlmenge());
+                values.put("anmerkung", artikel.getAnmerkung());
+                db.insertOrThrow(TABELLE_ARTIKEL, null, values);
+            }
+            db.setTransactionSuccessful();
+        } finally {
+            db.endTransaction();
+        }
+    }
+
     public synchronized List<Zaehlerliste> ladeZaehlerlisten() {
         List<Zaehlerliste> zaehlerlisten = new ArrayList<>();
         SQLiteDatabase db = getReadableDatabase();
