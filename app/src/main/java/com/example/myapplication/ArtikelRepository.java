@@ -5,6 +5,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.function.LongSupplier;
 
 // Das Repository kapselt die Herkunft der Artikeldaten.
 // Die Activity kennt dadurch nur fachliche Methoden und muss spaeter nicht
@@ -15,19 +16,47 @@ public class ArtikelRepository {
 
     private final InventurRemoteDataSource remoteDataSource;
     private final LokalerInventurSpeicher lokalerInventurSpeicher;
+    private final LongSupplier uhr;
+    private volatile Long letzterErfolgreicherListenabrufMillis;
     private boolean remoteBestandSynchronisiert;
     private boolean automatischeSynchronisierungPausiert;
     private String letzteSynchronisierungsFehlermeldung = "";
     private long naechsterRemoteVersuchAbMillis;
 
     public ArtikelRepository(InventurRemoteDataSource remoteDataSource, LokalerInventurSpeicher lokalerInventurSpeicher) {
+        this(remoteDataSource, lokalerInventurSpeicher, System::currentTimeMillis);
+    }
+
+    ArtikelRepository(InventurRemoteDataSource remoteDataSource, LokalerInventurSpeicher lokalerInventurSpeicher,
+            LongSupplier uhr) {
         this.remoteDataSource = remoteDataSource;
         this.lokalerInventurSpeicher = lokalerInventurSpeicher;
+        this.uhr = uhr;
     }
 
     public List<Zaehlerliste> ladeZaehlerlisten() {
         initialisiereOfflineBestandFallsNoetig();
         return lokalerInventurSpeicher.ladeZaehlerlisten();
+    }
+
+    public Listenuebersicht aktualisiereListenuebersicht() {
+        if (remoteDataSource instanceof MockInventurRemoteDataSource) {
+            return Listenuebersicht.lokal(ladeZaehlerlisten());
+        }
+        try {
+            List<ZaehlerlisteDto> server = remoteDataSource.ladeListenuebersicht();
+            Listenuebersicht stand = Listenuebersicht.vomServer(lokalerInventurSpeicher.ladeZaehlerlisten(), server);
+            // Erst die vollstaendige und eindeutige Listenantwort gilt als erfolgreicher Abruf.
+            long abrufzeit = uhr.getAsLong();
+            letzterErfolgreicherListenabrufMillis = abrufzeit;
+            return stand.mitAbrufzeit(abrufzeit);
+        } catch (RemoteDatenException | IllegalArgumentException exception) {
+            return Listenuebersicht.lokal(lokalerInventurSpeicher.ladeZaehlerlisten(), letzterErfolgreicherListenabrufMillis);
+        }
+    }
+
+    public Long holeLetztenErfolgreichenListenabrufMillis() {
+        return letzterErfolgreicherListenabrufMillis;
     }
 
     public Zaehlerliste ladeZaehlerlisteFuerId(int zaehlerlistenId) {
@@ -55,7 +84,6 @@ public class ArtikelRepository {
                 schreiberName,
                 artikelListe
         );
-        lokalerInventurSpeicher.merkeZaehlerlisteFuerSynchronisierung(zaehlerlistenId);
         return new ZaehlmengenSpeicherAntwort(
                 true,
                 "Lokal gespeichert.",
@@ -81,7 +109,10 @@ public class ArtikelRepository {
                 schreiberName,
                 artikelListe
         );
-        lokalerInventurSpeicher.merkeZaehlerlisteFuerSynchronisierung(zaehlerlistenId);
+
+        if (istSqlSchreibenGesperrt()) {
+            return new ZaehlmengenSpeicherAntwort(false, "Lokal gespeichert. " + SqlServerSchreibschutz.MELDUNG, null);
+        }
 
         if (!darfRemoteVersuchtWerden()) {
             return new ZaehlmengenSpeicherAntwort(
@@ -133,7 +164,6 @@ public class ArtikelRepository {
             return false;
         }
 
-        lokalerInventurSpeicher.merkeZaehlerlisteFuerSynchronisierung(zaehlerlistenId);
         if (darfRemoteVersuchtWerden()) {
             synchronisiereAusstehendeAenderungen(true);
         }
@@ -158,11 +188,17 @@ public class ArtikelRepository {
     }
 
     public void angleicheBeispielWochenlistenZuordnungFuerTest(String zaehlerName, String schreiberName) {
-        lokalerInventurSpeicher.angleicheBeispielWochenlistenZuordnungFuerTest(zaehlerName, schreiberName);
+        if (remoteDataSource instanceof MockInventurRemoteDataSource) {
+            lokalerInventurSpeicher.angleicheBeispielWochenlistenZuordnungFuerTest(zaehlerName, schreiberName);
+        }
     }
 
     public boolean hatOffeneSynchronisierung() {
         return lokalerInventurSpeicher.hatOffeneSynchronisierung();
+    }
+
+    public boolean istSqlSchreibenGesperrt() {
+        return remoteDataSource.istSchreibgeschuetzt();
     }
 
     public boolean hatOffeneSynchronisierungFuerZaehlerliste(int zaehlerlistenId) {
@@ -182,6 +218,11 @@ public class ArtikelRepository {
     }
 
     public String holeLetzteSynchronisierungsFehlermeldung() {
+        if (istSqlSchreibenGesperrt()) {
+            return SqlServerSchreibschutz.MELDUNG
+                    + (letzteSynchronisierungsFehlermeldung == null || letzteSynchronisierungsFehlermeldung.isEmpty()
+                    ? "" : "\n\n" + letzteSynchronisierungsFehlermeldung);
+        }
         String diagnose = remoteDataSource.holeLetzteDiagnose();
         boolean hatFehlermeldung = letzteSynchronisierungsFehlermeldung != null
                 && !letzteSynchronisierungsFehlermeldung.trim().isEmpty();
@@ -238,15 +279,19 @@ public class ArtikelRepository {
         pruefeDatenbankverbindungUndSynchronisiereBeiBedarf();
     }
 
-    private void initialisiereOfflineBestandFallsNoetig() {
+    private synchronized void initialisiereOfflineBestandFallsNoetig() {
         boolean apiModusAktiv = AppContainer.istApiModusAktiv();
-        lokalerInventurSpeicher.initialisiereBeispieldatenFuerHilfstabellenFallsLeer();
+        if (!apiModusAktiv) {
+            lokalerInventurSpeicher.initialisiereBeispieldatenFuerHilfstabellenFallsLeer();
+        }
         boolean hatLokaleZaehlerlisten = lokalerInventurSpeicher.hatZaehlerlisten();
 
         if (apiModusAktiv && hatLokaleZaehlerlisten && !automatischeSynchronisierungPausiert) {
             synchronisiereAusstehendeAenderungen();
         }
-        if (apiModusAktiv && hatLokaleZaehlerlisten) {
+        if (apiModusAktiv && hatLokaleZaehlerlisten
+                && (remoteBestandSynchronisiert || automatischeSynchronisierungPausiert
+                || lokalerInventurSpeicher.hatOffeneSynchronisierung() || !darfRemoteVersuchtWerden())) {
             return;
         }
 
@@ -274,15 +319,18 @@ public class ArtikelRepository {
                 );
             }
 
-            if (apiModusAktiv) {
-                lokalerInventurSpeicher.loescheAlleDaten();
-            }
+            // Beim Start aktualisieren, ohne lokale Statusdaten zu loeschen.
+            // Offene lokale Mengen sind oben vom Ueberschreiben ausgeschlossen.
             lokalerInventurSpeicher.initialisiereZaehlerlisten(zaehlerlisten);
             for (ZaehlerlisteDto zaehlerliste : zaehlerlisten) {
                 lokalerInventurSpeicher.initialisiereArtikel(
                         zaehlerliste.getId(),
                         artikelNachZaehlerlistenId.get(zaehlerliste.getId())
                     );
+            }
+            if (apiModusAktiv) {
+                lokalerInventurSpeicher.entferneVeralteteLeereZaehlerlisten(
+                        new ArrayList<>(artikelNachZaehlerlistenId.keySet()));
             }
             merkeRemoteErfolg();
             remoteBestandSynchronisiert = !zaehlerlisten.isEmpty();
@@ -298,6 +346,9 @@ public class ArtikelRepository {
     }
 
     private void synchronisiereAusstehendeAenderungen(boolean ignoriertPause) {
+        if (istSqlSchreibenGesperrt()) {
+            return;
+        }
         if (!ignoriertPause && automatischeSynchronisierungPausiert) {
             return;
         }

@@ -6,6 +6,8 @@ package com.example.myapplication;
 public class Artikel {
 
     private final int positionsNummer;
+    private final Long sqlPositionsId;
+    private final Integer quellBlattnummer;
     private final String artikelnummer;
     private final String bezeichnung;
     private final String lagerort;
@@ -55,6 +57,17 @@ public class Artikel {
             Integer zaehlMenge,
             String anmerkung
     ) {
+        this(positionsNummer, artikelnummer, bezeichnung, lagerort, istMenge, letzteZaehlmenge,
+                mindestbestand, zaehlMenge, anmerkung, null, null);
+    }
+
+    public Artikel(int positionsNummer, String artikelnummer, String bezeichnung, String lagerort,
+            int istMenge, Integer letzteZaehlmenge, int mindestbestand, Integer zaehlMenge,
+            String anmerkung, Long sqlPositionsId, Integer quellBlattnummer) {
+        boolean zugeordnet = sqlPositionsId != null && sqlPositionsId > 0
+                && quellBlattnummer != null && quellBlattnummer > 0;
+        this.sqlPositionsId = zugeordnet ? sqlPositionsId : null;
+        this.quellBlattnummer = zugeordnet ? quellBlattnummer : null;
         this.positionsNummer = positionsNummer;
         this.artikelnummer = artikelnummer;
         this.bezeichnung = bezeichnung;
@@ -65,6 +78,10 @@ public class Artikel {
         this.zaehlMenge = zaehlMenge;
         this.anmerkung = anmerkung == null ? "" : anmerkung;
     }
+
+    public Long getSqlPositionsId() { return sqlPositionsId; }
+
+    public Integer getQuellBlattnummer() { return quellBlattnummer; }
 
     public int getPositionsNummer() {
         return positionsNummer;

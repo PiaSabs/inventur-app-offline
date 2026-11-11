@@ -162,6 +162,9 @@
     <string name="speichern_erfolgreich">Speichern erfolgreich</string>
     <string name="speichern_fehler">Speichern fehlgeschlagen</string>
     <string name="testmodus_hinweis">Testmodus aktiv: Mock-Daten statt API/SQL</string>
+    <string name="sync_status_sql_gesperrt">SQL-Testbetrieb – keine Übertragung</string>
+    <string name="sync_status_sql_gesperrt_detail">SQL-Daten können gelesen werden. Mengen, Notizen und Abschlüsse werden nur lokal gespeichert. Offene Übertragungen bleiben erhalten und werden nicht an SQL gesendet.</string>
+    <string name="abschluss_nur_lokal">Zählblatt lokal abgeschlossen. Keine SQL-Übertragung.</string>
     <string name="sync_status_erfolgreich">Alles übertragen</string>
     <string name="sync_status_offen">Lokal gespeichert – Übertragung offen.</string>
     <string name="sync_status_kein_netzwerk">Offline – lokal gespeichert.</string>
@@ -202,4 +205,14 @@
     <string name="abgeschlossene_liste_dialog_bearbeiten">Wieder bearbeiten</string>
     <string name="abgeschlossene_liste_dialog_nicht_bearbeiten">Nur ansehen</string>
     <string name="abgeschlossene_liste_oeffnen_fehler">BlattNr konnte nicht zur Bearbeitung geöffnet werden.</string>
+    <string name="listenquelle_laden">SQL-Listen werden aktualisiert …</string>
+    <string name="listenquelle_server">SQL-Listen aktuell – zuletzt geladen um %1$s</string>
+    <string name="listenquelle_lokal">Lokal gespeicherte Listen – SQL nicht erreichbar</string>
+    <string name="listenquelle_letzter_abruf">Letzter erfolgreicher SQL-Listenabruf um %1$s · Uhrzeit des Geräts</string>
+    <string name="listenquelle_noch_kein_abruf">In dieser App-Sitzung noch kein erfolgreicher SQL-Listenabruf</string>
+    <string name="listenquelle_fehler">Listen konnten nicht geladen werden · Bisherige Anzeige unverändert</string>
+    <string name="listenquelle_eintrag_lokal">Lokal gespeichert</string>
+    <string name="listenquelle_eintrag_server">SQL-Listenstand · Abschluss lokal</string>
+    <string name="listenquelle_nur_blattkopf">Die Blattinformationen sind aktuell. Für dieses Blatt ist noch kein lokaler Artikelbestand verfügbar.</string>
+    <string name="lokales_speichern_fehler">Lokal nicht gespeichert. Änderungen bleiben in dieser Ansicht offen. Bitte erneut speichern.</string>
 </resources>

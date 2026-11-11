@@ -21,7 +21,6 @@ import androidx.recyclerview.widget.RecyclerView;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -52,6 +51,9 @@ public class ZaehlerlistenActivity extends AppCompatActivity {
     private NetzwerkStatusBeobachter netzwerkStatusBeobachter;
     private boolean netzwerkVerfuegbar;
     private boolean netzwerkstatusInitialisiert;
+    private boolean ansichtAktiv;
+    private int ladeGeneration;
+    private Listenuebersicht listenuebersicht;
     private List<Zaehlerliste> aktuellAngezeigteZaehlerlisten = Collections.emptyList();
 
     @Override
@@ -84,6 +86,7 @@ public class ZaehlerlistenActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
+        ansichtAktiv = true;
         if (netzwerkStatusBeobachter != null) {
             netzwerkStatusBeobachter.starten();
         }
@@ -93,6 +96,8 @@ public class ZaehlerlistenActivity extends AppCompatActivity {
 
     @Override
     protected void onPause() {
+        ansichtAktiv = false;
+        ladeGeneration++;
         super.onPause();
         if (netzwerkStatusBeobachter != null) {
             netzwerkStatusBeobachter.stoppen();
@@ -107,33 +112,29 @@ public class ZaehlerlistenActivity extends AppCompatActivity {
     }
 
 
-    // Laedt die Blaetter jedes Mal neu.
-    // Wichtig nach Rueckkehr aus der Artikeluebersicht: Wenn ein Blatt dort als
-    // abgeschlossen markiert wurde, soll die Liste sofort den neuen Status zeigen.
     private void ladeZaehlerlistenInDieAnsicht() {
-        if (artikelRepository == null || zaehlerlistenRecyclerView == null || executorService.isShutdown()) {
-            return;
-        }
-
+        if (!ansichtAktiv || artikelRepository == null || executorService.isShutdown()) return;
+        int generation = ++ladeGeneration;
+        ListenLadestatusAnzeige.laedt(this, artikelRepository.holeLetztenErfolgreichenListenabrufMillis());
         executorService.execute(() -> {
             try {
-                List<Zaehlerliste> zaehlerlisten = filtereBlaetterFuerAuswahl(artikelRepository.ladeZaehlerlisten());
+                Listenuebersicht uebersicht = artikelRepository.aktualisiereListenuebersicht();
+                List<Zaehlerliste> listen = uebersicht.filtereAuswahl(
+                        ausgewaehlteZaehlerlistenId, ausgewaehlteZaehlerlistenBezeichnung);
                 runOnUiThread(() -> {
-                    aktuellAngezeigteZaehlerlisten = new ArrayList<>(zaehlerlisten);
-                    ZaehlerlistenAdapter adapter = new ZaehlerlistenAdapter(
-                            zaehlerlisten,
-                            this::starteArtikeluebersicht,
-                            ZaehlerlistenAdapter.AnzeigeModus.BLATTNUMMER
-                    );
-                    zaehlerlistenRecyclerView.setAdapter(adapter);
+                    if (!ansichtAktiv || generation != ladeGeneration || isDestroyed()) return;
+                    listenuebersicht = uebersicht;
+                    aktuellAngezeigteZaehlerlisten = new ArrayList<>(listen);
+                    zaehlerlistenRecyclerView.setAdapter(new ZaehlerlistenAdapter(listen, this::starteArtikeluebersicht,
+                            ZaehlerlistenAdapter.AnzeigeModus.BLATTNUMMER, uebersicht));
+                    ListenLadestatusAnzeige.ergebnis(this, uebersicht);
                     aktualisiereSynchronisierungsstatus();
                 });
             } catch (RuntimeException exception) {
-                runOnUiThread(() -> Toast.makeText(
-                        this,
-                        "Zaehlerlisten konnten nicht geladen werden.",
-                        Toast.LENGTH_SHORT
-                ).show());
+                runOnUiThread(() -> {
+                    if (!ansichtAktiv || generation != ladeGeneration || isDestroyed()) return;
+                    ListenLadestatusAnzeige.fehler(this, artikelRepository.holeLetztenErfolgreichenListenabrufMillis());
+                });
             }
         });
     }
@@ -150,6 +151,10 @@ public class ZaehlerlistenActivity extends AppCompatActivity {
     }
 
     private void starteArtikeluebersicht(Zaehlerliste zaehlerliste) {
+        if (listenuebersicht == null || !listenuebersicht.istLokalVerfuegbar(zaehlerliste.getId())) {
+            Toast.makeText(this, R.string.listenquelle_nur_blattkopf, Toast.LENGTH_LONG).show();
+            return;
+        }
         if (zaehlerliste.istAbgeschlossen()) {
             frageNachBearbeitungAbgeschlossenerListe(zaehlerliste);
             return;
@@ -225,7 +230,11 @@ public class ZaehlerlistenActivity extends AppCompatActivity {
 
         boolean hatOffeneSynchronisierung = hatOffeneSynchronisierungInAktuellerAuswahl();
         syncStatusContainer.setVisibility(View.VISIBLE);
-        if (hatOffeneSynchronisierung && !netzwerkVerfuegbar) {
+        if (artikelRepository.istSqlSchreibenGesperrt()) {
+            syncStatusTextView.setText(R.string.sync_status_sql_gesperrt);
+            syncStatusTextView.setTextColor(Color.parseColor("#FFE19A"));
+            syncStatusInfoButton.setVisibility(View.VISIBLE);
+        } else if (hatOffeneSynchronisierung && !netzwerkVerfuegbar) {
             syncStatusTextView.setText(R.string.sync_status_kein_netzwerk);
             syncStatusTextView.setTextColor(Color.parseColor("#FFE19A"));
             syncStatusInfoButton.setVisibility(View.VISIBLE);
@@ -240,6 +249,14 @@ public class ZaehlerlistenActivity extends AppCompatActivity {
     }
 
     private void zeigeSynchronisierungsdetails() {
+        if (artikelRepository.istSqlSchreibenGesperrt()) {
+            new AlertDialog.Builder(this)
+                    .setTitle(R.string.sync_status_sql_gesperrt)
+                    .setMessage(R.string.sync_status_sql_gesperrt_detail)
+                    .setPositiveButton(android.R.string.ok, (dialog, which) -> dialog.dismiss())
+                    .show();
+            return;
+        }
         boolean hatOffeneSynchronisierung = hatOffeneSynchronisierungInAktuellerAuswahl();
         if (!netzwerkVerfuegbar && hatOffeneSynchronisierung) {
             new AlertDialog.Builder(this)
@@ -277,39 +294,20 @@ public class ZaehlerlistenActivity extends AppCompatActivity {
     }
 
     private void pruefeSynchronisierungNachNetzwechsel() {
-        executorService.execute(() -> {
-            artikelRepository.verarbeiteNetzwerkWiederVerfuegbar();
-            runOnUiThread(this::ladeZaehlerlistenInDieAnsicht);
-        });
+        ladeZaehlerlistenInDieAnsicht();
     }
 
     private void pruefeDatenbankverbindungPeriodisch() {
-        if (!AppContainer.istApiModusAktiv() || artikelRepository == null || !netzwerkVerfuegbar) {
-            return;
-        }
-        executorService.execute(() -> {
-            artikelRepository.pruefeDatenbankverbindungUndSynchronisiereBeiBedarf();
-            runOnUiThread(this::ladeZaehlerlistenInDieAnsicht);
-        });
+        if (netzwerkVerfuegbar) ladeZaehlerlistenInDieAnsicht();
     }
 
     private void pruefeDatenbankverbindungManuell() {
-        Toast.makeText(this, R.string.datenbank_pruefung_startet, Toast.LENGTH_SHORT).show();
-        executorService.execute(() -> {
-            artikelRepository.pruefeDatenbankverbindungUndSynchronisiereSofort();
-            runOnUiThread(() -> {
-                ladeZaehlerlistenInDieAnsicht();
-                if (hatOffeneSynchronisierungInAktuellerAuswahl()) {
-                    Toast.makeText(this, R.string.sync_status_offen, Toast.LENGTH_SHORT).show();
-                } else {
-                    Toast.makeText(this, R.string.datenbank_pruefung_erfolgreich, Toast.LENGTH_SHORT).show();
-                }
-            });
-        });
+        ladeZaehlerlistenInDieAnsicht();
     }
 
     private void versucheZumHauptmenueZurueckzukehren() {
-        if (!AppContainer.istApiModusAktiv() || artikelRepository == null || !hatOffeneSynchronisierungInAktuellerAuswahl()) {
+        if (!AppContainer.istApiModusAktiv() || artikelRepository == null
+                || artikelRepository.istSqlSchreibenGesperrt() || !hatOffeneSynchronisierungInAktuellerAuswahl()) {
             finish();
             return;
         }
@@ -343,50 +341,11 @@ public class ZaehlerlistenActivity extends AppCompatActivity {
     }
 
     private void versucheSynchronisierungVorRueckkehr() {
-        Toast.makeText(this, R.string.datenbank_pruefung_startet, Toast.LENGTH_SHORT).show();
-        executorService.execute(() -> {
-            artikelRepository.pruefeDatenbankverbindungUndSynchronisiereSofort();
-            runOnUiThread(() -> {
-                ladeZaehlerlistenInDieAnsicht();
-                if (hatOffeneSynchronisierungInAktuellerAuswahl()) {
-                    Toast.makeText(this, R.string.sync_hauptmenue_retry_offen, Toast.LENGTH_SHORT).show();
-                    zeigeHauptmenueBlockiertDialog();
-                    return;
-                }
-                Toast.makeText(this, R.string.sync_hauptmenue_retry_erfolgreich, Toast.LENGTH_SHORT).show();
-                finish();
-            });
-        });
-    }
-
-    private List<Zaehlerliste> filtereBlaetterFuerAuswahl(List<Zaehlerliste> alleZaehlerlisten) {
-        if (alleZaehlerlisten == null || alleZaehlerlisten.isEmpty()) {
-            return Collections.emptyList();
+        if (!hatOffeneSynchronisierungInAktuellerAuswahl()) {
+            finish();
+            return;
         }
-
-        List<Zaehlerliste> gefilterteZaehlerlisten = new ArrayList<>();
-        String bezeichnungFilter = normalisiereText(ausgewaehlteZaehlerlistenBezeichnung);
-
-        for (Zaehlerliste zaehlerliste : alleZaehlerlisten) {
-            if (!bezeichnungFilter.isEmpty() && bezeichnungFilter.equals(normalisiereText(zaehlerliste.getBezeichnung()))) {
-                gefilterteZaehlerlisten.add(zaehlerliste);
-            }
-        }
-
-        if (!gefilterteZaehlerlisten.isEmpty()) {
-            return gefilterteZaehlerlisten;
-        }
-
-        for (Zaehlerliste zaehlerliste : alleZaehlerlisten) {
-            if (zaehlerliste.getId() == ausgewaehlteZaehlerlistenId) {
-                gefilterteZaehlerlisten.add(zaehlerliste);
-                break;
-            }
-        }
-        return gefilterteZaehlerlisten;
-    }
-
-    private String normalisiereText(String wert) {
-        return wert == null ? "" : wert.trim().toLowerCase(Locale.GERMANY);
+        ladeZaehlerlistenInDieAnsicht();
+        zeigeHauptmenueBlockiertDialog();
     }
 }

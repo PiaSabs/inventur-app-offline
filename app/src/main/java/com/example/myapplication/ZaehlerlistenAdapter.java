@@ -29,6 +29,7 @@ public class ZaehlerlistenAdapter extends RecyclerView.Adapter<ZaehlerlistenAdap
     private final List<Zaehlerliste> zaehlerlisten;
     private final OnZaehlerlisteClickListener onZaehlerlisteClickListener;
     private final AnzeigeModus anzeigeModus;
+    private final Listenuebersicht listenuebersicht;
 
     public ZaehlerlistenAdapter(List<Zaehlerliste> zaehlerlisten, OnZaehlerlisteClickListener onZaehlerlisteClickListener) {
         this(zaehlerlisten, onZaehlerlisteClickListener, AnzeigeModus.STANDARD);
@@ -39,9 +40,16 @@ public class ZaehlerlistenAdapter extends RecyclerView.Adapter<ZaehlerlistenAdap
             OnZaehlerlisteClickListener onZaehlerlisteClickListener,
             AnzeigeModus anzeigeModus
     ) {
+        this(zaehlerlisten, onZaehlerlisteClickListener, anzeigeModus, null);
+    }
+
+    public ZaehlerlistenAdapter(List<Zaehlerliste> zaehlerlisten,
+            OnZaehlerlisteClickListener onZaehlerlisteClickListener,
+            AnzeigeModus anzeigeModus, Listenuebersicht listenuebersicht) {
         this.zaehlerlisten = zaehlerlisten;
         this.onZaehlerlisteClickListener = onZaehlerlisteClickListener;
         this.anzeigeModus = anzeigeModus;
+        this.listenuebersicht = listenuebersicht;
     }
 
     @NonNull
@@ -54,6 +62,11 @@ public class ZaehlerlistenAdapter extends RecyclerView.Adapter<ZaehlerlistenAdap
     @Override
     public void onBindViewHolder(@NonNull ZaehlerlisteViewHolder holder, int position) {
         holder.bind(zaehlerlisten.get(position), onZaehlerlisteClickListener, anzeigeModus);
+        if (listenuebersicht != null) {
+            holder.bereichTextView.append("\n" + holder.itemView.getContext().getString(
+                    listenuebersicht.istNurLokal(zaehlerlisten.get(position).getId())
+                            ? R.string.listenquelle_eintrag_lokal : R.string.listenquelle_eintrag_server));
+        }
     }
 
     @Override

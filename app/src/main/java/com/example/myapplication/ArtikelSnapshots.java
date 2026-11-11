@@ -19,7 +19,9 @@ final class ArtikelSnapshots {
                     artikel.getLetzteZaehlmenge(),
                     artikel.getMindestbestand(),
                     artikel.getZaehlMenge(),
-                    artikel.getAnmerkung()
+                    artikel.getAnmerkung(),
+                    artikel.getSqlPositionsId(),
+                    artikel.getQuellBlattnummer()
             ));
         }
         return snapshot;

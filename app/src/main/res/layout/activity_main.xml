@@ -90,6 +90,13 @@
 
         </LinearLayout>
 
+        <include
+            android:id="@+id/listenLadestatusContainer"
+            layout="@layout/view_listen_ladestatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp" />
+
         <TextView
             android:id="@+id/testmodusTextView"
             android:layout_width="wrap_content"

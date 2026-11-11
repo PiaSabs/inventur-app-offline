@@ -7,7 +7,7 @@ import android.content.Context;
 // einer Stelle vorgenommen.
 public final class AppContainer {
 
-    private static final boolean API_MODUS_AKTIV = false;
+    private static final boolean API_MODUS_AKTIV = true;
     private static final InventurRemoteDataSource MOCK_REMOTE_DATA_SOURCE = new MockInventurRemoteDataSource();
     private static ArtikelRepository mockArtikelRepository;
     private static ArtikelRepository apiArtikelRepository;
@@ -32,7 +32,8 @@ public final class AppContainer {
             );
         }
         if (apiArtikelRepository == null) {
-            LokalerInventurSpeicher lokalerInventurSpeicher = new LokalerInventurSpeicher(appContext, "inventur_demo_offline.db");
+            // Eigener Cache: Demo-Mengen und fruehere offene Uebertragungen nicht senden.
+            LokalerInventurSpeicher lokalerInventurSpeicher = new LokalerInventurSpeicher(appContext, "inventur_sql_offline.db");
             apiArtikelRepository = new ArtikelRepository(
                     new ApiInventurRemoteDataSource(lokalerInventurSpeicher),
                     lokalerInventurSpeicher

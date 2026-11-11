@@ -7,7 +7,6 @@ import android.view.Menu;
 import android.view.View;
 import android.widget.PopupMenu;
 import android.widget.TextView;
-import android.widget.Toast;
 
 import androidx.activity.EdgeToEdge;
 import androidx.appcompat.app.AlertDialog;
@@ -45,6 +44,8 @@ public class MainActivity extends AppCompatActivity {
     private NetzwerkStatusBeobachter netzwerkStatusBeobachter;
     private boolean netzwerkVerfuegbar;
     private boolean netzwerkstatusInitialisiert;
+    private boolean ansichtAktiv;
+    private int ladeGeneration;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -72,12 +73,12 @@ public class MainActivity extends AppCompatActivity {
         nichtFaelligeRecyclerView.setLayoutManager(new LinearLayoutManager(this));
         registriereBottomNavigation();
         registriereKopfMenue();
-        ladeZaehlerlistenInDieAnsicht();
     }
 
     @Override
     protected void onResume() {
         super.onResume();
+        ansichtAktiv = true;
         if (netzwerkStatusBeobachter != null) {
             netzwerkStatusBeobachter.starten();
         }
@@ -89,6 +90,8 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     protected void onPause() {
+        ansichtAktiv = false;
+        ladeGeneration++;
         super.onPause();
         if (netzwerkStatusBeobachter != null) {
             netzwerkStatusBeobachter.stoppen();
@@ -103,31 +106,32 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void ladeZaehlerlistenInDieAnsicht() {
+        if (!ansichtAktiv || artikelRepository == null || executorService.isShutdown()) return;
+        int generation = ++ladeGeneration;
+        ListenLadestatusAnzeige.laedt(this, artikelRepository.holeLetztenErfolgreichenListenabrufMillis());
         executorService.execute(() -> {
             try {
-                List<Zaehlerliste> alleZaehlerlisten = gruppiereZaehlerlistenFuerHauptmenue(artikelRepository.ladeZaehlerlisten());
-                List<Zaehlerliste> faelligeZaehlerlisten = new ArrayList<>();
-                List<Zaehlerliste> nichtFaelligeZaehlerlisten = new ArrayList<>();
-
-                for (Zaehlerliste zaehlerliste : alleZaehlerlisten) {
-                    if (zaehlerliste.istFaellig()) {
-                        faelligeZaehlerlisten.add(zaehlerliste);
-                    } else {
-                        nichtFaelligeZaehlerlisten.add(zaehlerliste);
-                    }
+                Listenuebersicht uebersicht = artikelRepository.aktualisiereListenuebersicht();
+                List<Zaehlerliste> alleZaehlerlisten = gruppiereZaehlerlistenFuerHauptmenue(uebersicht);
+                List<Zaehlerliste> faellig = new ArrayList<>();
+                List<Zaehlerliste> nichtFaellig = new ArrayList<>();
+                for (Zaehlerliste liste : alleZaehlerlisten) {
+                    (liste.istFaellig() ? faellig : nichtFaellig).add(liste);
                 }
-
                 runOnUiThread(() -> {
-                    faelligeRecyclerView.setAdapter(new ZaehlerlistenAdapter(faelligeZaehlerlisten, this::oeffneArtikeluebersicht));
-                    nichtFaelligeRecyclerView.setAdapter(new ZaehlerlistenAdapter(nichtFaelligeZaehlerlisten, this::oeffneArtikeluebersicht));
+                    if (!ansichtAktiv || generation != ladeGeneration || isDestroyed()) return;
+                    faelligeRecyclerView.setAdapter(new ZaehlerlistenAdapter(faellig, this::oeffneArtikeluebersicht,
+                            ZaehlerlistenAdapter.AnzeigeModus.STANDARD, uebersicht));
+                    nichtFaelligeRecyclerView.setAdapter(new ZaehlerlistenAdapter(nichtFaellig, this::oeffneArtikeluebersicht,
+                            ZaehlerlistenAdapter.AnzeigeModus.STANDARD, uebersicht));
+                    ListenLadestatusAnzeige.ergebnis(this, uebersicht);
                     aktualisiereSynchronisierungsstatus();
                 });
             } catch (RuntimeException exception) {
-                runOnUiThread(() -> Toast.makeText(
-                        this,
-                        "Zaehlerlisten konnten nicht geladen werden.",
-                        Toast.LENGTH_SHORT
-                ).show());
+                runOnUiThread(() -> {
+                    if (!ansichtAktiv || generation != ladeGeneration || isDestroyed()) return;
+                    ListenLadestatusAnzeige.fehler(this, artikelRepository.holeLetztenErfolgreichenListenabrufMillis());
+                });
             }
         });
     }
@@ -179,7 +183,11 @@ public class MainActivity extends AppCompatActivity {
 
         boolean hatOffeneSynchronisierung = artikelRepository.hatOffeneSynchronisierung();
         syncStatusContainer.setVisibility(View.VISIBLE);
-        if (!netzwerkVerfuegbar) {
+        if (artikelRepository.istSqlSchreibenGesperrt()) {
+            syncStatusTextView.setText(R.string.sync_status_sql_gesperrt);
+            syncStatusTextView.setTextColor(Color.parseColor("#FFE19A"));
+            syncStatusInfoButton.setVisibility(View.VISIBLE);
+        } else if (!netzwerkVerfuegbar) {
             syncStatusTextView.setText(R.string.sync_status_kein_netzwerk);
             syncStatusTextView.setTextColor(Color.parseColor("#FFE19A"));
             syncStatusInfoButton.setVisibility(View.VISIBLE);
@@ -194,6 +202,14 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void zeigeSynchronisierungsdetails() {
+        if (artikelRepository.istSqlSchreibenGesperrt()) {
+            new AlertDialog.Builder(this)
+                    .setTitle(R.string.sync_status_sql_gesperrt)
+                    .setMessage(R.string.sync_status_sql_gesperrt_detail)
+                    .setPositiveButton(android.R.string.ok, (dialog, which) -> dialog.dismiss())
+                    .show();
+            return;
+        }
         if (!netzwerkVerfuegbar) {
             new AlertDialog.Builder(this)
                     .setTitle(R.string.sync_status_dialog_titel)
@@ -222,20 +238,11 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void pruefeSynchronisierungNachNetzwechsel() {
-        executorService.execute(() -> {
-            artikelRepository.verarbeiteNetzwerkWiederVerfuegbar();
-            runOnUiThread(this::ladeZaehlerlistenInDieAnsicht);
-        });
+        ladeZaehlerlistenInDieAnsicht();
     }
 
     private void pruefeDatenbankverbindungPeriodisch() {
-        if (!AppContainer.istApiModusAktiv() || artikelRepository == null || !netzwerkVerfuegbar) {
-            return;
-        }
-        executorService.execute(() -> {
-            artikelRepository.pruefeDatenbankverbindungUndSynchronisiereBeiBedarf();
-            runOnUiThread(this::ladeZaehlerlistenInDieAnsicht);
-        });
+        if (netzwerkVerfuegbar) ladeZaehlerlistenInDieAnsicht();
     }
 
     private void setzeAngemeldetenZaehler() {
@@ -284,18 +291,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void pruefeDatenbankverbindungManuell() {
-        Toast.makeText(this, R.string.datenbank_pruefung_startet, Toast.LENGTH_SHORT).show();
-        executorService.execute(() -> {
-            artikelRepository.pruefeDatenbankverbindungUndSynchronisiereSofort();
-            runOnUiThread(() -> {
-                ladeZaehlerlistenInDieAnsicht();
-                if (artikelRepository.hatOffeneSynchronisierung()) {
-                    zeigeSynchronisierungsdetails();
-                } else {
-                    Toast.makeText(this, R.string.datenbank_pruefung_erfolgreich, Toast.LENGTH_SHORT).show();
-                }
-            });
-        });
+        ladeZaehlerlistenInDieAnsicht();
     }
 
     private void starteLogin() {
@@ -325,10 +321,12 @@ public class MainActivity extends AppCompatActivity {
         finish();
     }
 
-    private List<Zaehlerliste> gruppiereZaehlerlistenFuerHauptmenue(List<Zaehlerliste> zaehlerlisten) {
+    private List<Zaehlerliste> gruppiereZaehlerlistenFuerHauptmenue(Listenuebersicht uebersicht) {
+        List<Zaehlerliste> zaehlerlisten = uebersicht.getListen();
         Map<String, List<Zaehlerliste>> gruppierteZaehlerlisten = new LinkedHashMap<>();
         for (Zaehlerliste zaehlerliste : zaehlerlisten) {
             String schluessel = zaehlerliste.getBezeichnung() == null ? "" : zaehlerliste.getBezeichnung().trim();
+            schluessel = (uebersicht.istNurLokal(zaehlerliste.getId()) ? "lokal:" : "server:") + schluessel;
             gruppierteZaehlerlisten.computeIfAbsent(schluessel, key -> new ArrayList<>()).add(zaehlerliste);
         }
 

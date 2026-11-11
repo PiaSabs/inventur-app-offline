@@ -65,6 +65,9 @@ public class ArtikeluebersichtV2Activity extends AppCompatActivity {
     private List<Zaehlerliste> verfuegbareZaehlerlisten = new ArrayList<>();
     private String ausgewaehlteZaehlerlistenBezeichnung = "";
     private String letzterGespeicherterStand = "";
+    private final Object lokaleSpeicherSperre = new Object();
+    private volatile long speicherGeneration;
+    private Runnable nachLokalemSpeichern;
     private boolean ignoriertAenderungenBeimInitialisieren = true;
     private int gesamtPositionenFuerBlatt;
     private TextWatcher schreiberTextWatcher;
@@ -159,80 +162,83 @@ public class ArtikeluebersichtV2Activity extends AppCompatActivity {
     }
 
     private void fuehreSpeicherVorgangAus(boolean istAutomatisch, boolean mitSynchronisierung, Runnable onErfolg) {
+        if (ignoriertAenderungenBeimInitialisieren || isDestroyed()) return;
+        if (onErfolg != null && nachLokalemSpeichern == null) nachLokalemSpeichern = onErfolg;
+        if (autoSaveLaeuft) return;
         EditText zaehlerEditText = findViewById(R.id.zaehlerEditText);
         EditText schreiberEditText = findViewById(R.id.schreiberEditText);
-
-        if (zaehlerEditText.getText() != null && zaehlerEditText.getText().toString().trim().isEmpty()) {
-            if (!istAutomatisch) {
-                Toast.makeText(this, R.string.zaehler_fehlt, Toast.LENGTH_SHORT).show();
-            }
-            aktualisiereAutoSaveStatus();
-            return;
-        }
-
-        if (schreiberEditText.getText() != null && schreiberEditText.getText().toString().trim().isEmpty()) {
-            if (!istAutomatisch) {
-                Toast.makeText(this, R.string.schreiber_fehlt, Toast.LENGTH_SHORT).show();
-            }
-            aktualisiereAutoSaveStatus();
-            return;
-        }
-
         String zaehlerName = zaehlerEditText.getText() == null ? "" : zaehlerEditText.getText().toString().trim();
         String schreiberName = schreiberEditText.getText() == null ? "" : schreiberEditText.getText().toString().trim();
+        final int blattId = zaehlerlistenId;
         List<Artikel> artikelSnapshot = erstelleArtikelSnapshot();
-        String gespeicherterFingerprint = erstelleAktuellenStandFingerprint();
-
+        String fingerprint = erstelleAktuellenStandFingerprint();
+        long generation = ++speicherGeneration;
         autoSaveHandler.removeCallbacks(autoSaveRunnable);
         autoSaveGeplant = false;
         autoSaveLaeuft = true;
         aktualisiereAutoSaveStatus();
-
         executorService.execute(() -> {
-            ZaehlmengenSpeicherAntwort antwort = mitSynchronisierung
-                    ? artikelRepository.speichereZaehlmengenMitSynchronisierung(
-                            zaehlerlistenId,
-                            zaehlerName,
-                            schreiberName,
-                            artikelSnapshot
-                    )
-                    : artikelRepository.speichereZaehlmengenNurLokal(
-                            zaehlerlistenId,
-                            zaehlerName,
-                            schreiberName,
-                            artikelSnapshot
-                    );
+            ZaehlmengenSpeicherAntwort antwort;
+            try {
+                synchronized (lokaleSpeicherSperre) {
+                    if (generation != speicherGeneration) return;
+                    antwort = mitSynchronisierung && !artikelRepository.istSqlSchreibenGesperrt()
+                            ? artikelRepository.speichereZaehlmengenMitSynchronisierung(blattId, zaehlerName, schreiberName, artikelSnapshot)
+                            : artikelRepository.speichereZaehlmengenNurLokal(blattId, zaehlerName, schreiberName, artikelSnapshot);
+                }
+            } catch (RuntimeException exception) {
+                antwort = new ZaehlmengenSpeicherAntwort(false, getString(R.string.lokales_speichern_fehler), null);
+            }
+            ZaehlmengenSpeicherAntwort ergebnis = antwort;
             runOnUiThread(() -> {
+                if (isDestroyed() || generation != speicherGeneration || blattId != zaehlerlistenId) return;
                 autoSaveLaeuft = false;
-                if (antwort.istErfolgreich()) {
-                    boolean synchronisierungWeiterhinOffen = mitSynchronisierung
-                            && artikelRepository != null
-                            && artikelRepository.hatOffeneSynchronisierungFuerZaehlerliste(zaehlerlistenId);
-                    letzterGespeicherterStand = gespeicherterFingerprint;
-                    if (!istAutomatisch && synchronisierungWeiterhinOffen) {
-                        zeigeSynchronisierungsfehlerDialog(artikelRepository.holeLetzteSynchronisierungsFehlermeldung());
-                        aktualisiereSpeicherhinweis();
-                        aktualisiereAutoSaveStatus();
+                if (!ergebnis.istErfolgreich()) {
+                    nachLokalemSpeichern = null;
+                    Toast.makeText(this, R.string.lokales_speichern_fehler, Toast.LENGTH_LONG).show();
+                } else {
+                    letzterGespeicherterStand = fingerprint;
+                    if (hatUngespeicherteAenderungen()) {
+                        fuehreSpeicherVorgangAus(istAutomatisch, mitSynchronisierung, null);
                         return;
                     }
-                    if (onErfolg != null && hatUngespeicherteAenderungen()) {
-                        fuehreSpeicherVorgangAus(istAutomatisch, mitSynchronisierung, onErfolg);
-                        return;
-                    }
-                    if (onErfolg != null && !hatUngespeicherteAenderungen()) {
-                        onErfolg.run();
-                    }
+                    Runnable fortsetzen = nachLokalemSpeichern;
+                    nachLokalemSpeichern = null;
+                    if (fortsetzen != null) fortsetzen.run();
                 }
                 aktualisiereSpeicherhinweis();
-                if (hatUngespeicherteAenderungen()) {
-                    planeAutomatischesSpeichern();
-                }
                 aktualisiereAutoSaveStatus();
-                if (!istAutomatisch && !antwort.istErfolgreich()) {
-                    Toast.makeText(this, antwort.getMeldung(), Toast.LENGTH_SHORT).show();
-                }
             });
         });
+    }
+
+    @Override
+    protected void onPause() {
+        autoSaveHandler.removeCallbacks(autoSaveRunnable);
+        autoSaveGeplant = false;
+        nachLokalemSpeichern = null;
+        if (artikelRepository != null && !ignoriertAenderungenBeimInitialisieren
+                && !istBearbeitungGesperrt() && (hatUngespeicherteAenderungen() || autoSaveLaeuft)) {
+            EditText zaehler = findViewById(R.id.zaehlerEditText);
+            EditText schreiber = findViewById(R.id.schreiberEditText);
+            List<Artikel> snapshot = erstelleArtikelSnapshot();
+            String fingerprint = erstelleAktuellenStandFingerprint();
+            ++speicherGeneration;
+            try {
+                // Vor dem Lebenszykluswechsel nur lokal sichern; aeltere Auftraege nicht nachschreiben lassen.
+                synchronized (lokaleSpeicherSperre) {
+                    ZaehlmengenSpeicherAntwort antwort = artikelRepository.speichereZaehlmengenNurLokal(
+                            zaehlerlistenId, zaehler.getText().toString().trim(), schreiber.getText().toString().trim(), snapshot);
+                    if (!antwort.istErfolgreich()) throw new IllegalStateException("Lokale Speicherung nicht bestaetigt");
+                }
+                letzterGespeicherterStand = fingerprint;
+            } catch (RuntimeException exception) {
+                Toast.makeText(this, R.string.lokales_speichern_fehler, Toast.LENGTH_LONG).show();
+            }
+            autoSaveLaeuft = false;
+            aktualisiereAutoSaveStatus();
+        }
+        super.onPause();
     }
 
     private void zeigeSynchronisierungsfehlerDialog(String meldung) {
@@ -424,7 +430,12 @@ public class ArtikeluebersichtV2Activity extends AppCompatActivity {
 
     private void setzeTestmodusHinweis() {
         TextView testmodusTextView = findViewById(R.id.testmodusTextView);
-        testmodusTextView.setVisibility(AppContainer.istMockModusAktiv() ? View.VISIBLE : View.GONE);
+        if (artikelRepository.istSqlSchreibenGesperrt()) {
+            testmodusTextView.setText(R.string.sync_status_sql_gesperrt);
+            testmodusTextView.setVisibility(View.VISIBLE);
+        } else {
+            testmodusTextView.setVisibility(AppContainer.istMockModusAktiv() ? View.VISIBLE : View.GONE);
+        }
     }
 
     private void planeAutomatischesSpeichern() {
@@ -554,7 +565,7 @@ public class ArtikeluebersichtV2Activity extends AppCompatActivity {
         if (artikelRepository != null) {
             artikelRepository.setzeAutomatischeSynchronisierungPausiert(false);
         }
-        executorService.shutdownNow();
+        executorService.shutdown();
     }
 
     private void registriereSchreiberAenderungen() {
@@ -761,6 +772,9 @@ public class ArtikeluebersichtV2Activity extends AppCompatActivity {
     }
 
     private void ladeAnsichtsdaten(RecyclerView artikelRecyclerView) {
+        ignoriertAenderungenBeimInitialisieren = true;
+        final int ladeBlattId = zaehlerlistenId;
+
         executorService.execute(() -> {
             List<Artikel> geladeneArtikel = new ArrayList<>();
             Zaehlerliste geladeneZaehlerliste = null;
@@ -774,8 +788,8 @@ public class ArtikeluebersichtV2Activity extends AppCompatActivity {
                         "Peter"
                 );
                 geladeneZaehlerlisten = artikelRepository.ladeZaehlerlisten();
-                geladeneArtikel = artikelRepository.ladeArtikel(zaehlerlistenId);
-                geladeneZaehlerliste = artikelRepository.ladeZaehlerlisteFuerId(zaehlerlistenId);
+                geladeneArtikel = artikelRepository.ladeArtikel(ladeBlattId);
+                geladeneZaehlerliste = artikelRepository.ladeZaehlerlisteFuerId(ladeBlattId);
             } catch (RuntimeException exception) {
                 fehlermeldung = "Artikeldaten konnten nicht geladen werden.";
             }
@@ -785,6 +799,7 @@ public class ArtikeluebersichtV2Activity extends AppCompatActivity {
             List<Zaehlerliste> finaleGeladeneZaehlerlisten = geladeneZaehlerlisten;
             String finaleFehlermeldung = fehlermeldung;
             runOnUiThread(() -> {
+                if (isDestroyed() || ladeBlattId != zaehlerlistenId) return;
                 ignoriertAenderungenBeimInitialisieren = true;
                 artikelListe = finaleGeladeneArtikel;
                 gesamtPositionenFuerBlatt = finaleGeladeneArtikel.size();
@@ -824,11 +839,16 @@ public class ArtikeluebersichtV2Activity extends AppCompatActivity {
     }
 
     private void markiereZaehlerlisteAlsAbgeschlossenUndVerlasse() {
+        final int abschlussBlattId = zaehlerlistenId;
         executorService.execute(() -> {
             try {
-                artikelRepository.markiereZaehlerlisteAlsAbgeschlossen(zaehlerlistenId);
+                if (!artikelRepository.markiereZaehlerlisteAlsAbgeschlossen(abschlussBlattId)) {
+                    throw new IllegalStateException("Lokaler Abschluss konnte nicht gespeichert werden");
+                }
                 runOnUiThread(() -> {
-                    Toast.makeText(this, R.string.abschluss_erfolgreich, Toast.LENGTH_SHORT).show();
+                    if (isDestroyed() || zaehlerlistenId != abschlussBlattId) return;
+                    Toast.makeText(this, artikelRepository.istSqlSchreibenGesperrt()
+                            ? R.string.abschluss_nur_lokal : R.string.abschluss_erfolgreich, Toast.LENGTH_SHORT).show();
                     setResult(RESULT_OK);
                     finish();
                 });
@@ -843,17 +863,7 @@ public class ArtikeluebersichtV2Activity extends AppCompatActivity {
     }
 
     private void markiereZaehlerlisteAutomatischAlsAbgeschlossenUndVerlasse() {
-        executorService.execute(() -> {
-            try {
-                artikelRepository.markiereZaehlerlisteAlsAbgeschlossen(zaehlerlistenId);
-            } catch (RuntimeException exception) {
-                // Rueckkehr zur Blattliste bleibt auch bei lokalem Fehler erlaubt.
-            }
-            runOnUiThread(() -> {
-                setResult(RESULT_OK);
-                finish();
-            });
-        });
+        markiereZaehlerlisteAlsAbgeschlossenUndVerlasse();
     }
 
     private void registriereFesteListener() {

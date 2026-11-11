@@ -59,6 +59,11 @@ target/
 *.dump
 *.apk
 *.aab
+*.apks
+*.apk.idsig
+*.dex
+*.class
+**/BuildConfig.java
 *.log
 *.tmp
 *.swp
@@ -73,4 +78,8 @@ backup/
 # Originale ungeklaerter Herkunft bleiben lokal, nicht veroeffentlichen.
 /sql/Bestandszaehlung2.sql
 /sql/Testdaten_Zaehlerliste_9001_SQL2005.sql
-/app/src/main/res/drawable-nodpi/system_trailers_logo.png
+# Lokale Importwerkzeuge.
+/sql/seed-app-demo.sql
+/sql/seed-app-demo.ps1
+# Nicht freigegebene lokale Logo-Ressourcen.
+/app/src/main/res/drawable-nodpi/*_logo.png

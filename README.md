@@ -1,56 +1,136 @@
-# Inventur-App: lokale Android-Demo und eigenstaendiges Backend
+# Inventur-App
 
-## Stand und Grenzen
+Die Android-App und das Spring-Boot-Backend sind getrennte Projekte.
+Die Android-App verwendet derzeit JDBC fuer SQL Server und SQLite als lokalen
+Offline-Speicher. Das Backend verwendet PostgreSQL; eine REST-Anbindung der
+Android-App ist noch nicht implementiert.
 
-- Android ist eine lokale Demo mit frei erfundenen Artikeln und Zaehlerlisten.
-  Der direkte SQL-Server-Zugriff und der JDBC-Treiber wurden entfernt.
-  Der API-Platzhalter lehnt externe Aufrufe ab; eine Android-REST-Integration
-  ist noch nicht implementiert.
-- Demo-Daten liegen in `inventur_demo_offline.db`. Vorhandene Daten aus
-  `inventur_offline.db` werden von der Demo nicht geoeffnet oder migriert.
-  Lokale Mengen, Listendarstellung und Abschlussfunktionen bleiben vorhanden.
-  Eine Mock-Bestaetigung ist KEINE Bestaetigung des Spring-Boot-Servers.
-- Backend: Java 21, Spring Boot 4.1.1, PostgreSQL 17, Flyway V1 bis V9,
-  elf fachliche Tabellen, JWT-Pruefung, datensatzbezogene Autorisierung,
-  idempotentes Ergebnisspeichern, dauerhafte Konfliktarchivierung und ein
-  gesicherter Abschluss-PUT mit ausdruecklichem Zaehlblattabschluss und automatischem
-  Sitzungsabschluss (Lernschritt 32).
-- Noch offen: echte OIDC-Anbieter-/Benutzereinrichtung, Android-Anbindung,
-  Konfliktbearbeitung, Neuzuweisung und Rundenstartablaeufe,
-  produktive Bereitstellung. Keine ungesicherte Zwischenloesung verwenden.
+## Architektur und Grenzen
 
-Die Android-App und das Maven-Backend sind getrennte Projekte. Sie teilen
-keine Zugangsdaten und haben noch keine funktionierende REST-Verbindung.
-Weitere Backend-Vertraege stehen in [backend/README.md](backend/README.md).
+Die Listenuebersicht liest SQL Server -> JDBC -> Anzeigestand im Arbeitsspeicher.
+Sie wird beim Oeffnen und erneuten Anzeigen sowie bei manueller Aktualisierung,
+Netzwiederkehr und der bestehenden Vordergrundpruefung erneut geladen.
+Ladeanzeige und Abrufzeit beruhen auf der vollstaendigen Listenantwort, nicht
+auf einem Verbindungscheck. Die letzte Erfolgszeit gilt fuer die App-Sitzung.
+Bei Fehlern bleiben lokal gespeicherte Listen verfuegbar; nur lokal vorhandene
+Blaetter bleiben auch neben einem erfolgreichen Serverstand sichtbar.
 
-## Voraussetzungen auf einem neuen Rechner
+Fuer Artikel bleibt der Ladeweg SQL Server -> JDBC -> SQLite -> Oberflaeche.
+`ApiInventurRemoteDataSource` ist trotz ihres Namens eine JDBC-Datenquelle.
+Beim ersten erfolgreichen Laden werden Listen und Artikel lokal gespeichert.
+Ein erneutes Oeffnen eines Blatts aktiviert keinen wiederholten Artikelimport.
+Vorhandene Positionen werden durch die Initialisierung nicht ersetzt. Fuer
+neue Positionen bleiben SQL-Positions-ID und Blattnummer im lesenden Transport
+bis zur lokalen Speicherung erhalten. Altbestaende werden nicht nachtraeglich
+zugeordnet. Das aktiviert keinen automatischen Artikelabgleich. Positionsnummer
+und Artikelnummer sind kein Ersatz fuer die SQL-Identitaet.
+Die ID einer Bestandszaehlung ist nicht die ID der Artikelposition.
+Ohne Serververbindung bleibt der vorhandene lokale Bestand nutzbar.
 
-- Git sowie Android Studio mit Android SDK 36.1; Android-Minimum API 24.
-- JDK 21 fuer Gradle und Maven. Java-Sprachniveau der Android-Quellen bleibt 11.
-- Docker Desktop mit laufender lokaler Linux-Engine fuer PostgreSQL/Testcontainers.
-- Fuer den Windows-Einrichtungshelfer zusaetzlich Python 3.
-- Internetzugriff fuer Wrapper, Abhaengigkeiten und das PostgreSQL-Image.
+`SqlServerSchreibschutz` blockiert die bekannten SQL-Schreibwege der App.
+Mengen, Notizen und Abschluesse bleiben lokal, offene Uebertragungen bleiben
+bestehen. Es gibt keine Einstellung zum Freigeben von SQL-Schreiben.
+Die zusaetzliche JDBC- und SQL-Textpruefung ersetzt kein serverseitig beschraenktes
+Lesekonto. Eine verlaessliche Konflikterkennung zwischen Geraeten fehlt noch.
 
-Gradle Wrapper und Maven Wrapper liegen bei. Der Maven Wrapper verwendet
-`only-script`; eine Wrapper-JAR ist dafuer nicht erforderlich.
-Android Studio erzeugt `local.properties` mit dem SDK-Pfad lokal.
-Keine alten SQL-Zugangswerte auf den neuen Rechner uebernehmen.
+SQL-Testdaten und die lokale Demo verwenden getrennte SQLite-Dateien.
+Ein Wechsel der Build-Variante setzt den lokalen Bestand nicht zurueck.
+SQLite-Versionserhoehungen koennen additive Migrationen ausloesen; Version 11
+ergaenzt lokale Aenderungskennzeichen und Revisionen. Ungeklaerte Altbestaende
+bleiben geschuetzt. Android-Backup und Geraeteuebertragung sind deaktiviert;
+ein bewusster lokaler Export ist noch nicht implementiert.
 
-## Android starten und testen
+## Voraussetzungen
 
-Projektroot in Android Studio oeffnen, JDK 21 fuer Gradle waehlen und die App
-auf Emulator/Geraet starten. Sie arbeitet im Demo-Modus.
-Alternativ unter PowerShell im Projektroot:
+- Android Studio mit Android SDK 36.1 und JDK 21; Android-Minimum API 24.
+- Das Java-Sprachniveau der Android-Quellen ist 11.
+- Git und Internetzugriff fuer noch nicht vorhandene Build-Abhaengigkeiten.
+- Fuer Backend-Integrationstests zusaetzlich Docker mit lokaler Linux-Engine.
+
+Gradle Wrapper und Maven Wrapper liegen bei. Android Studio kann den lokalen
+SDK-Pfad in `local.properties` hinterlegen; alternativ ist `ANDROID_HOME` moeglich.
+Lokale Konfiguration und Build-Ausgaben gehoeren nicht in Git.
+
+## Oeffentliche Android-Builds
+
+Debug und Release enthalten grundsaetzlich keine SQL-Verbindungswerte aus der
+lokalen Konfiguration, auch wenn diese auf dem Build-Rechner vorhanden ist.
+Builds ohne SQL-Konfiguration sind moeglich. Ohne konfigurierte Verbindung zeigt
+die App vorhandene lokale Daten; auf einer neuen Installation fehlt ein
+Serverbestand. Es erfolgt kein automatischer Wechsel in den Mock-Demo-Modus.
 
 ```powershell
 $env:JAVA_HOME = "$env:ProgramFiles\Android\Android Studio\jbr"
-.\gradlew.bat :app:assembleDebug :app:assembleRelease :app:testDebugUnitTest
+.\gradlew.bat :app:testDebugUnitTest :app:assembleDebug :app:assembleRelease
 ```
 
-Das Release-APK ist unsigniert. Private Signierschluessel gehoeren niemals in Git.
-Cloud-Backup und Geraeteuebertragung von App-Daten sind ausgeschlossen. Eine
-bewusste lokale Datensicherung/Exportfunktion ist noch nicht implementiert.
-Keinen Build aus dem alten Unternehmensstand verteilen.
+Das Release-APK ist unsigniert. Private Signierschluessel bleiben lokal.
+APK-, AAB-, BuildConfig- und sonstige generierte Build-Dateien werden ignoriert.
+Vor einer Weitergabe sind das konkrete Artefakt und sein Inhalt zu pruefen;
+Ignore-Regeln verhindern keine manuellen Uploads zu Releases oder CI-Artefakten.
+
+## Lokaler JDBC-Testbuild
+
+Ein separater Build `internalSql` ist nur nach ausdruecklicher Aktivierung
+verfuegbar. Ausschliesslich dieser Build liest SQL-Werte aus der ignorierten
+`local.properties`: `sqlServerHost`, `sqlServerPort`, `sqlServerDatabase`,
+`sqlServerSchema`, `sqlServerUsername` und `sqlServerPassword`.
+Verbindungswerte werden nicht in Beispieldateien eingecheckt.
+
+```powershell
+.\gradlew.bat -PenableInternalSqlBuild=true :app:assembleInternalSql
+```
+
+Das Artefakt dieser Variante ist ausschliesslich fuer den lokalen Testbetrieb
+bestimmt: Seine Zugangsdaten sind im APK auslesbar. Es darf nicht oeffentlich
+weitergegeben oder als Release-Artefakt hochgeladen werden. Der SQL-Schreibschutz
+bleibt auch in dieser Variante aktiv.
+
+Die interne Variante behaelt Application-ID, Debug-Signierung und SQLite-Dateien
+bei. Ein Update setzt passende Signierung voraus und darf keine App-Daten loeschen.
+Oeffentliche Debug- oder Release-Builds sind kein Ersatz fuer eine konfigurierte
+interne Testinstallation.
+
+Die interne Variante heisst auf dem Geraet `Firm app`. Zum lokalen Update dient
+`./gradlew.bat -PenableInternalSqlBuild=true :app:installInternalSql`.
+`installDebug` installiert eine Variante ohne SQL-Verbindungswerte und ist
+daher kein Update fuer den laufenden SQL-Testbetrieb.
+
+## Vorbereitung einer Veroeffentlichung
+
+Allgemeiner Anwendungscode, Tests mit fiktiven Daten und die Beschreibung des
+lokalen Profils koennen getrennt von Firmenkonfigurationen versioniert werden.
+Lokale SQL-Skripte, Datenbankdateien, Diagnoseexporte, Zugangskonfigurationen und
+erzeugte APKs bleiben ausgeschlossen. Die gezielten Ignore-Regeln schuetzen vor
+versehentlichem `git add .`; sie schuetzen weder bereits versionierte Inhalte
+noch ein APK vor dem Auslesen seiner eingebetteten Werte.
+
+Vor einem spaeteren Commit die konkrete Dateiauswahl, den vorgemerkten Diff und
+die Git-Historie auf Geheimnisse und vertrauliche Daten pruefen. SQL-Tabellen-
+und Spaltennamen im JDBC-Adapter sind technische Schnittstellen und keine
+Zugangskonfiguration. Ob diese Schnittstellen und vorhandene Bildressourcen
+oeffentlich freigegeben sind, muss vor einer Veroeffentlichung geklaert sein.
+
+Zur Weitergabe ausschliesslich ein geprueftes Debug- oder Release-Artefakt ohne
+SQL-Konfiguration verwenden. Keine pauschalen APK-Verzeichnis-Uploads und keine
+internen Test-APKs in Releases oder CI-Artefakte aufnehmen. Auch ein oeffentliches
+APK darf nicht zusammen mit einem Export lokaler Firmendaten verteilt werden.
+
+Der aktuelle Android-Code hat keinen REST-Uebertragungspfad. Eine spaetere
+REST-Anbindung darf den Firmen-SQL-Cache oder seine Warteschlange nicht
+automatisch uebernehmen. Dafuer sind eine getrennte Datenquelle und ein eigener
+Speicher sowie eine ausdruecklich festgelegte Datenuebernahme erforderlich.
+
+## Android-Tests
+
+Lokale Unit-Tests laufen ohne SQL-Verbindung. Instrumentierungstests mit Fakes
+und isolierten SQLite-Datenbanken werden getrennt von SQL-Livetests ausgefuehrt.
+Tests duerfen keine Firmen-Zugangsdaten voraussetzen oder SQL-Schreiben gegen
+Betriebsdatenbanken ausloesen. Vorhandene Instrumentierungstests haben noch
+bekannte Probleme bei Testdatenbank-Kontext und Activity-Lebenszyklus; die
+vollstaendige Suite ist nicht durchgehend erfolgreich.
+
+Weitere Backend-Vertraege stehen in [backend/README.md](backend/README.md).
 
 ## Neue lokale PostgreSQL-Entwicklungsumgebung unter Windows
 
@@ -146,33 +226,3 @@ extern als `SPRING_DATASOURCE_URL`, `SPRING_DATASOURCE_USERNAME` und
 `SPRING_DATASOURCE_PASSWORD` bereitgestellt. Keine echten Werte in README,
 Befehlsprotokolle oder Projektdateien schreiben. Eine .env-Datei wird nicht
 automatisch von Spring Boot geladen.
-
-## Lokale Originale, Git-Index und sichere Uebernahme
-
-Vor der Bereinigung wurde eine vollstaendige, gepruefte DPAPI-Rueckfallsicherung
-ausserhalb des Projektverzeichnisses unter dem lokalen Benutzerprofil erstellt.
-Die alten Bildressourcen sind nur dort erhalten. Die beiden ungeklaerten
-SQL-Originale bleiben lokal und sind gezielt ignoriert. Sie werden nicht als
-fiktive Demo-Daten ausgegeben. `CON` bleibt ebenfalls lokal ignoriert.
-Neue Logo-/Hintergrundgrafiken bestehen aus selbst erstelltem XML.
-
-Die Bereinigung fuehrt KEIN git add, commit oder push aus.
-Der alte Index kann deshalb noch alte Quellen, Logo und SQL-Dateien enthalten.
-Ignore-Regeln entfernen bereits vorgemerkte Dateien nicht automatisch.
-
-Erst nach ausdruecklicher Freigabe kontrolliert:
-1. Alte SQL-Originale und Firmenlogo ausschliesslich aus dem Index entfernen.
-2. Geaenderte/entfernte Android-Dateien und .gitignore aktualisieren.
-3. Neue README, XML-Demo-Ressourcen und das komplette Backend aufnehmen.
-4. Vorgemerkte Inhalte erneut auf Geheimnisse, Vollstaendigkeit und ungeklaerte
-   Unternehmensdaten pruefen. Keine lokalen Caches, Datenbanken oder Artefakte aufnehmen.
-5. Erst danach Commit und Push gesondert freigeben.
-
-## Verifikation der Bereinigung
-
-Backend: 421 Tests ohne Fehler oder uebersprungene Tests, Maven package erfolgreich.
-Android: Debug und unsigniertes Release kompilieren; vier Unit-Tests bestehen.
-Ein Emulator-/Geraetetest ist zusaetzlich sinnvoll und wurde nicht ersetzt.
-Der PostgreSQL-Helfer wird auf diesem bestehenden Rechner nur mit --check geprueft;
-seine neue Containererstellung wird hier nicht ausgefuehrt.
-

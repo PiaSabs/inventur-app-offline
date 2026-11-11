@@ -14,7 +14,7 @@ import java.util.List;
 public class LokalerInventurSpeicher extends SQLiteOpenHelper {
 
     private static final String DATENBANK_NAME = "inventur_offline.db";
-    private static final int DATENBANK_VERSION = 10;
+    private static final int DATENBANK_VERSION = 11;
 
     private static final String TABELLE_ZAEHLERLISTE = "zaehlerliste";
     private static final String TABELLE_ARTIKEL = "artikel";
@@ -198,6 +198,7 @@ public class LokalerInventurSpeicher extends SQLiteOpenHelper {
         fuegeSpalteHinzuFallsFehlt(db, TABELLE_BESTANDSZAEHLUNGEN, "letzte_zaehlmenge REAL");
         erstelleZaehlerlistenStatusTabelleFallsNoetig(db);
         erstelleSyncWarteschlangenTabelleFallsNoetig(db);
+        ergaenzeLokaleAenderungsinformationen(db);
     }
 
     @Override
@@ -244,6 +245,26 @@ public class LokalerInventurSpeicher extends SQLiteOpenHelper {
             fuegeSpalteHinzuFallsFehlt(db, TABELLE_ARTIKEL, "letzte_zaehlmenge INTEGER");
             fuegeSpalteHinzuFallsFehlt(db, TABELLE_BESTANDSZAEHLUNGEN, "letzte_zaehlmenge REAL");
         }
+        if (oldVersion < 11) {
+            ergaenzeLokaleAenderungsinformationen(db);
+        }
+    }
+
+    private void ergaenzeLokaleAenderungsinformationen(SQLiteDatabase db) {
+        // Ohne nachgewiesenen Serverstand bleiben auch neue Datensaetze geschuetzt.
+        for (String tabelle : new String[]{TABELLE_ARTIKEL, TABELLE_ZAEHLERLISTE}) {
+            fuegeSpalteHinzuFallsFehlt(db, tabelle, "sync_unklar INTEGER NOT NULL DEFAULT 1");
+            fuegeSpalteHinzuFallsFehlt(db, tabelle, "lokale_revision INTEGER NOT NULL DEFAULT 0");
+            fuegeSpalteHinzuFallsFehlt(db, tabelle, "bestaetigter_serverstand TEXT");
+        }
+        // Die aktuelle Artikelquelle liefert noch keine nachgewiesene Zuordnung mit Serverstand.
+        fuegeSpalteHinzuFallsFehlt(db, TABELLE_ARTIKEL, "sql_positions_id TEXT");
+        fuegeSpalteHinzuFallsFehlt(db, TABELLE_ARTIKEL, "quell_blattnummer TEXT");
+        fuegeSpalteHinzuFallsFehlt(db, TABELLE_ARTIKEL, "quell_stichtag TEXT");
+        fuegeSpalteHinzuFallsFehlt(db, TABELLE_ARTIKEL, "menge_lokal_geaendert INTEGER NOT NULL DEFAULT 0");
+        fuegeSpalteHinzuFallsFehlt(db, TABELLE_ARTIKEL, "notiz_lokal_geaendert INTEGER NOT NULL DEFAULT 0");
+        fuegeSpalteHinzuFallsFehlt(db, TABELLE_ZAEHLERLISTE, "kopf_lokal_geaendert INTEGER NOT NULL DEFAULT 0");
+        fuegeSpalteHinzuFallsFehlt(db, TABELLE_ZAEHLERLISTE, "abschluss_lokal_geaendert INTEGER NOT NULL DEFAULT 0");
     }
 
     @Override
@@ -280,7 +301,12 @@ public class LokalerInventurSpeicher extends SQLiteOpenHelper {
         SQLiteDatabase db = getWritableDatabase();
         db.beginTransaction();
         try {
+            boolean warLeer = zaehleDatensaetze(db, TABELLE_ZAEHLERLISTE) == 0;
             for (ZaehlerlisteDto zaehlerliste : zaehlerlisten) {
+                try (Cursor vorhanden = db.rawQuery("SELECT 1 FROM zaehlerliste WHERE id = ?",
+                        new String[]{String.valueOf(zaehlerliste.getId())})) {
+                    if (vorhanden.moveToFirst()) continue;
+                }
                 ZaehlerlistenStatusInfo statusInfo = ladeZaehlerlistenStatusInfo(db, zaehlerliste.getId());
                 ContentValues values = new ContentValues();
                 values.put("id", zaehlerliste.getId());
@@ -294,9 +320,9 @@ public class LokalerInventurSpeicher extends SQLiteOpenHelper {
                 values.put("zaehler_name", statusInfo == null || statusInfo.zaehlerName.trim().isEmpty() ? zaehlerliste.getGespeicherterZaehlerName() : statusInfo.zaehlerName);
                 values.put("schreiber_name", statusInfo == null || statusInfo.schreiberName.trim().isEmpty() ? zaehlerliste.getGespeicherterSchreiberName() : statusInfo.schreiberName);
                 values.put("zaehl_typ", zaehlerliste.getZaehlTyp());
-                db.insertWithOnConflict(TABELLE_ZAEHLERLISTE, null, values, SQLiteDatabase.CONFLICT_REPLACE);
+                db.insertOrThrow(TABELLE_ZAEHLERLISTE, null, values);
             }
-            wendeBeispielZaehlerlistenStatusFuerTestAn(db);
+            if (warLeer) wendeBeispielZaehlerlistenStatusFuerTestAn(db);
             db.setTransactionSuccessful();
         } finally {
             db.endTransaction();
@@ -308,11 +334,41 @@ public class LokalerInventurSpeicher extends SQLiteOpenHelper {
             return;
         }
 
+        java.util.Set<Long> quellIds = new java.util.HashSet<>();
+        for (ArtikelDto artikel : artikelListe) {
+            if (artikel.getSqlPositionsId() != null && (!quellIds.add(artikel.getSqlPositionsId())
+                    || artikel.getQuellBlattnummer() != zaehlerlistenId)) {
+                throw new IllegalArgumentException("SQL-Positionszuordnung ist nicht eindeutig.");
+            }
+        }
         SQLiteDatabase db = getWritableDatabase();
         db.beginTransaction();
         try {
+            try (Cursor kopf = db.rawQuery("SELECT abgeschlossen FROM zaehlerliste WHERE id = ?",
+                    new String[]{String.valueOf(zaehlerlistenId)})) {
+                if (kopf.moveToFirst()) {
+                    if (kopf.getInt(0) != 0) return;
+                } else if (!quellIds.isEmpty()) {
+                    throw new IllegalArgumentException("Lokale Blattzuordnung fehlt.");
+                }
+            }
             for (ArtikelDto artikel : artikelListe) {
+                // Der bisherige Import kann vorhandene Positionen noch nicht sicher abgleichen.
+                try (Cursor vorhanden = db.rawQuery("SELECT 1 FROM artikel WHERE zaehlerlisten_id = ? AND pos_nr = ?",
+                        new String[]{String.valueOf(zaehlerlistenId), String.valueOf(artikel.getPositionsNummer())})) {
+                    if (vorhanden.moveToFirst()) continue;
+                }
+                if (artikel.getSqlPositionsId() != null) {
+                    try (Cursor anderePosition = db.rawQuery("SELECT 1 FROM artikel WHERE sql_positions_id = ?",
+                            new String[]{String.valueOf(artikel.getSqlPositionsId())})) {
+                        if (anderePosition.moveToFirst()) continue;
+                    }
+                }
                 ContentValues values = new ContentValues();
+                if (artikel.getSqlPositionsId() != null) {
+                    values.put("sql_positions_id", String.valueOf(artikel.getSqlPositionsId()));
+                    values.put("quell_blattnummer", String.valueOf(artikel.getQuellBlattnummer()));
+                }
                 values.put("zaehlerlisten_id", zaehlerlistenId);
                 values.put("pos_nr", artikel.getPositionsNummer());
                 values.put("artikelnummer", artikel.getArtikelnummer());
@@ -333,7 +389,7 @@ public class LokalerInventurSpeicher extends SQLiteOpenHelper {
                 String vorhandeneAnmerkung = ladeArtikelAnmerkung(db, zaehlerlistenId, artikel.getPositionsNummer(), artikel.getArtikelnummer());
                 String anmerkung = istLeer(artikel.getAnmerkung()) ? vorhandeneAnmerkung : artikel.getAnmerkung();
                 values.put("anmerkung", anmerkung);
-                db.insertWithOnConflict(TABELLE_ARTIKEL, null, values, SQLiteDatabase.CONFLICT_REPLACE);
+                db.insertOrThrow(TABELLE_ARTIKEL, null, values);
             }
             db.setTransactionSuccessful();
         } finally {
@@ -456,7 +512,11 @@ public class LokalerInventurSpeicher extends SQLiteOpenHelper {
                         cursor.isNull(cursor.getColumnIndexOrThrow("zaehl_menge"))
                                 ? null
                                 : cursor.getInt(cursor.getColumnIndexOrThrow("zaehl_menge")),
-                        cursor.getString(cursor.getColumnIndexOrThrow("anmerkung"))
+                        cursor.getString(cursor.getColumnIndexOrThrow("anmerkung")),
+                        cursor.isNull(cursor.getColumnIndexOrThrow("sql_positions_id")) ? null
+                                : cursor.getLong(cursor.getColumnIndexOrThrow("sql_positions_id")),
+                        cursor.isNull(cursor.getColumnIndexOrThrow("quell_blattnummer")) ? null
+                                : cursor.getInt(cursor.getColumnIndexOrThrow("quell_blattnummer"))
                 ));
             }
         } finally {
@@ -469,36 +529,52 @@ public class LokalerInventurSpeicher extends SQLiteOpenHelper {
         SQLiteDatabase db = getWritableDatabase();
         db.beginTransaction();
         try {
-            ContentValues kopfValues = new ContentValues();
-            kopfValues.put("zaehler_name", zaehlerName == null ? "" : zaehlerName);
-            kopfValues.put("schreiber_name", schreiberName == null ? "" : schreiberName);
-            db.update(
-                    TABELLE_ZAEHLERLISTE,
-                    kopfValues,
-                    "id = ?",
-                    new String[]{String.valueOf(zaehlerlistenId)}
-            );
-            speichereZaehlerlistenStatus(db, zaehlerlistenId, zaehlerName, schreiberName, null);
+            String zaehler = zaehlerName == null ? "" : zaehlerName;
+            String schreiber = schreiberName == null ? "" : schreiberName;
+            boolean abgeschlossen;
+            try (Cursor kopf = db.rawQuery("SELECT abgeschlossen FROM zaehlerliste WHERE id = ?",
+                    new String[]{String.valueOf(zaehlerlistenId)})) {
+                if (!kopf.moveToFirst()) throw new IllegalArgumentException("Zaehlerliste fehlt lokal.");
+                abgeschlossen = kopf.getInt(0) != 0;
+            }
+            db.execSQL("UPDATE zaehlerliste SET zaehler_name = ?, schreiber_name = ?, "
+                            + "kopf_lokal_geaendert = 1, lokale_revision = lokale_revision + 1 "
+                            + "WHERE id = ? AND (zaehler_name IS NOT ? OR schreiber_name IS NOT ?)",
+                    new Object[]{zaehler, schreiber, zaehlerlistenId, zaehler, schreiber});
+            speichereZaehlerlistenStatus(db, zaehlerlistenId, zaehler, schreiber, abgeschlossen);
 
             for (Artikel artikel : artikelListe) {
-                ContentValues artikelValues = new ContentValues();
-                if (artikel.getZaehlMenge() == null) {
-                    artikelValues.putNull("zaehl_menge");
-                } else {
-                    artikelValues.put("zaehl_menge", artikel.getZaehlMenge());
+                String auswahl = artikel.getPositionsNummer() > 0
+                        ? "zaehlerlisten_id = ? AND pos_nr = ? AND artikelnummer = ?"
+                        : "zaehlerlisten_id = ? AND artikelnummer = ?";
+                String[] parameter = artikel.getPositionsNummer() > 0
+                        ? new String[]{String.valueOf(zaehlerlistenId), String.valueOf(artikel.getPositionsNummer()), artikel.getArtikelnummer()}
+                        : new String[]{String.valueOf(zaehlerlistenId), artikel.getArtikelnummer()};
+                try (Cursor position = db.query(TABELLE_ARTIKEL,
+                        new String[]{"pos_nr", "zaehl_menge", "anmerkung", "sql_positions_id", "quell_blattnummer"},
+                        auswahl, parameter, null, null, null)) {
+                    if (position.getCount() != 1 || !position.moveToFirst()) {
+                        throw new IllegalArgumentException("Artikelposition fehlt oder ist nicht eindeutig.");
+                    }
+                    if (artikel.getSqlPositionsId() != null && (position.isNull(3) || position.isNull(4)
+                            || artikel.getSqlPositionsId() != position.getLong(3)
+                            || artikel.getQuellBlattnummer() != position.getInt(4))) {
+                        throw new IllegalArgumentException("SQL-Positionsidentitaet hat sich geaendert.");
+                    }
+                    Integer menge = position.isNull(1) ? null : position.getInt(1);
+                    boolean mengeGeaendert = !java.util.Objects.equals(menge, artikel.getZaehlMenge());
+                    boolean notizGeaendert = !java.util.Objects.equals(position.getString(2), artikel.getAnmerkung());
+                    if (!mengeGeaendert && !notizGeaendert) continue;
+                    // Die Revision steigt nur bei einer tatsaechlichen Aenderung.
+                    db.execSQL("UPDATE artikel SET zaehl_menge = ?, anmerkung = ?, "
+                                    + "menge_lokal_geaendert = MAX(menge_lokal_geaendert, ?), "
+                                    + "notiz_lokal_geaendert = MAX(notiz_lokal_geaendert, ?), "
+                                    + "lokale_revision = lokale_revision + 1 WHERE zaehlerlisten_id = ? AND pos_nr = ?",
+                            new Object[]{artikel.getZaehlMenge(), artikel.getAnmerkung(), mengeGeaendert ? 1 : 0,
+                                    notizGeaendert ? 1 : 0, zaehlerlistenId, position.getInt(0)});
                 }
-                artikelValues.put("anmerkung", artikel.getAnmerkung());
-                db.update(
-                        TABELLE_ARTIKEL,
-                        artikelValues,
-                        artikel.getPositionsNummer() > 0
-                                ? "zaehlerlisten_id = ? AND pos_nr = ?"
-                                : "zaehlerlisten_id = ? AND artikelnummer = ?",
-                        artikel.getPositionsNummer() > 0
-                                ? new String[]{String.valueOf(zaehlerlistenId), String.valueOf(artikel.getPositionsNummer())}
-                                : new String[]{String.valueOf(zaehlerlistenId), artikel.getArtikelnummer()}
-                );
             }
+            merkeZaehlerlisteFuerSynchronisierung(db, zaehlerlistenId);
             db.setTransactionSuccessful();
         } finally {
             db.endTransaction();
@@ -506,11 +582,17 @@ public class LokalerInventurSpeicher extends SQLiteOpenHelper {
     }
 
     public synchronized void merkeZaehlerlisteFuerSynchronisierung(int zaehlerlistenId) {
-        SQLiteDatabase db = getWritableDatabase();
+        merkeZaehlerlisteFuerSynchronisierung(getWritableDatabase(), zaehlerlistenId);
+    }
+
+    private void merkeZaehlerlisteFuerSynchronisierung(SQLiteDatabase db, int zaehlerlistenId) {
         ContentValues values = new ContentValues();
         values.put("zaehlerlisten_id", zaehlerlistenId);
         values.put("geaendert_am", String.valueOf(System.currentTimeMillis()));
-        db.insertWithOnConflict(TABELLE_SYNC_WARTESCHLANGE, null, values, SQLiteDatabase.CONFLICT_REPLACE);
+        if (db.insertWithOnConflict(TABELLE_SYNC_WARTESCHLANGE, null, values,
+                SQLiteDatabase.CONFLICT_REPLACE) < 0) {
+            throw new android.database.sqlite.SQLiteException("Uebertragungsauftrag konnte nicht gespeichert werden.");
+        }
     }
 
     public synchronized void entferneZaehlerlisteAusSynchronisierung(int zaehlerlistenId) {
@@ -570,31 +652,33 @@ public class LokalerInventurSpeicher extends SQLiteOpenHelper {
     }
 
     public synchronized boolean markiereZaehlerlisteAlsAbgeschlossen(int zaehlerlistenId) {
-        SQLiteDatabase db = getWritableDatabase();
-        ContentValues values = new ContentValues();
-        values.put("abgeschlossen", 1);
-        int aktualisierteZeilen = db.update(
-                TABELLE_ZAEHLERLISTE,
-                values,
-                "id = ?",
-                new String[]{String.valueOf(zaehlerlistenId)}
-        );
-        speichereZaehlerlistenStatus(db, zaehlerlistenId, null, null, true);
-        return aktualisierteZeilen > 0;
+        return speichereAbschluss(zaehlerlistenId, true);
     }
 
     public synchronized boolean markiereZaehlerlisteAlsOffen(int zaehlerlistenId) {
+        return speichereAbschluss(zaehlerlistenId, false);
+    }
+
+    private boolean speichereAbschluss(int zaehlerlistenId, boolean abgeschlossen) {
         SQLiteDatabase db = getWritableDatabase();
-        ContentValues values = new ContentValues();
-        values.put("abgeschlossen", 0);
-        int aktualisierteZeilen = db.update(
-                TABELLE_ZAEHLERLISTE,
-                values,
-                "id = ?",
-                new String[]{String.valueOf(zaehlerlistenId)}
-        );
-        speichereZaehlerlistenStatus(db, zaehlerlistenId, null, null, false);
-        return aktualisierteZeilen > 0;
+        db.beginTransaction();
+        try {
+            try (Cursor kopf = db.rawQuery("SELECT abgeschlossen FROM zaehlerliste WHERE id = ?",
+                    new String[]{String.valueOf(zaehlerlistenId)})) {
+                if (!kopf.moveToFirst()) return false;
+                if ((kopf.getInt(0) != 0) != abgeschlossen) {
+                    db.execSQL("UPDATE zaehlerliste SET abgeschlossen = ?, abschluss_lokal_geaendert = 1, "
+                                    + "lokale_revision = lokale_revision + 1 WHERE id = ?",
+                            new Object[]{abgeschlossen ? 1 : 0, zaehlerlistenId});
+                }
+            }
+            speichereZaehlerlistenStatus(db, zaehlerlistenId, null, null, abgeschlossen);
+            merkeZaehlerlisteFuerSynchronisierung(db, zaehlerlistenId);
+            db.setTransactionSuccessful();
+            return true;
+        } finally {
+            db.endTransaction();
+        }
     }
 
     public synchronized boolean sindAlleZaehlerlistenMitBezeichnungAbgeschlossen(String bezeichnung) {
@@ -618,6 +702,31 @@ public class LokalerInventurSpeicher extends SQLiteOpenHelper {
         } finally {
             cursor.close();
         }
+    }
+
+    // Ungeklaerte Listen bleiben auch ohne Artikel oder Warteschlangeneintrag erhalten.
+    public synchronized void entferneVeralteteLeereZaehlerlisten(List<Integer> aktiveListenIds) {
+        if (aktiveListenIds == null) {
+            return;
+        }
+        StringBuilder where = new StringBuilder("NOT EXISTS (SELECT 1 FROM " + TABELLE_ARTIKEL
+                + " a WHERE a.zaehlerlisten_id=" + TABELLE_ZAEHLERLISTE + ".id)"
+                + " AND NOT EXISTS (SELECT 1 FROM " + TABELLE_SYNC_WARTESCHLANGE
+                + " s WHERE s.zaehlerlisten_id=" + TABELLE_ZAEHLERLISTE + ".id)");
+        where.append(" AND sync_unklar = 0 AND bestaetigter_serverstand IS NOT NULL"
+                + " AND kopf_lokal_geaendert = 0 AND abschluss_lokal_geaendert = 0");
+        List<String> argumente = new ArrayList<>();
+        if (!aktiveListenIds.isEmpty()) {
+            where.append(" AND id NOT IN (");
+            for (int i = 0; i < aktiveListenIds.size(); i++) {
+                if (i > 0) where.append(",");
+                where.append("?");
+                argumente.add(String.valueOf(aktiveListenIds.get(i)));
+            }
+            where.append(")");
+        }
+        getWritableDatabase().delete(TABELLE_ZAEHLERLISTE, where.toString(),
+                argumente.toArray(new String[0]));
     }
 
     public synchronized void loescheAlleDaten() {
@@ -1196,7 +1305,10 @@ public class LokalerInventurSpeicher extends SQLiteOpenHelper {
         values.put("abgeschlossen", abgeschlossen == null
                 ? (vorhandenerStatus != null && vorhandenerStatus.abgeschlossen ? 1 : 0)
                 : (abgeschlossen ? 1 : 0));
-        db.insertWithOnConflict(TABELLE_ZAEHLERLISTEN_STATUS, null, values, SQLiteDatabase.CONFLICT_REPLACE);
+        if (db.insertWithOnConflict(TABELLE_ZAEHLERLISTEN_STATUS, null, values,
+                SQLiteDatabase.CONFLICT_REPLACE) < 0) {
+            throw new android.database.sqlite.SQLiteException("Lokaler Listenstatus konnte nicht gespeichert werden.");
+        }
     }
 
     private ZaehlerlistenStatusInfo ladeZaehlerlistenStatusInfo(SQLiteDatabase db, int zaehlerlistenId) {
