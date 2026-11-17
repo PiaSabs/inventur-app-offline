@@ -16,6 +16,10 @@ public interface InventurRemoteDataSource {
 
     List<ArtikelDto> ladeArtikel(int zaehlerlistenId) throws RemoteDatenException;
 
+    default List<SqlPosition> ladeSqlPositionen(int blattId) throws RemoteDatenException {
+        throw new RemoteDatenException("Positionspruefung wird von dieser Datenquelle nicht unterstuetzt.");
+    }
+
     ZaehlmengenSpeicherAntwort speichereZaehlmengen(ZaehlmengenSpeicherAnfrage anfrage) throws RemoteDatenException;
 
     void markiereZaehlerlisteAlsAbgeschlossen(int zaehlerlistenId) throws RemoteDatenException;

@@ -89,7 +89,7 @@ public class LokaleAenderungsinformationenTest {
         }
         speicher = new LokalerInventurSpeicher(context, name);
         List<Artikel> artikel = speicher.ladeArtikel(41);
-        assertEquals(11, speicher.getReadableDatabase().getVersion());
+        assertEquals(13, speicher.getReadableDatabase().getVersion());
         assertEquals(3, artikel.size());
         assertEquals(3, artikel.get(0).getPositionsNummer());
         assertEquals(8, artikel.get(1).getPositionsNummer());
@@ -144,6 +144,7 @@ public class LokaleAenderungsinformationenTest {
         assertEquals(0, zahl("SELECT notiz_lokal_geaendert FROM artikel WHERE pos_nr=1"));
         assertEquals(1, zahl("SELECT lokale_revision FROM artikel WHERE pos_nr=1"));
         assertEquals(0, zahl("SELECT lokale_revision FROM artikel WHERE pos_nr=2"));
+        assertEquals(0, zahl("SELECT kopf_lokal_geaendert+abschluss_lokal_geaendert+lokale_revision FROM zaehlerliste WHERE id=41"));
         assertTrue(speicher.hatOffeneSynchronisierungFuerZaehlerliste(41));
     }
 
@@ -157,7 +158,79 @@ public class LokaleAenderungsinformationenTest {
         assertEquals(1, zahl("SELECT notiz_lokal_geaendert FROM artikel WHERE pos_nr=1"));
         assertEquals(0, zahl("SELECT menge_lokal_geaendert FROM artikel WHERE pos_nr=1"));
         assertEquals(1, zahl("SELECT lokale_revision FROM artikel WHERE pos_nr=1"));
+        assertEquals(0, zahl("SELECT kopf_lokal_geaendert+abschluss_lokal_geaendert+lokale_revision FROM zaehlerliste WHERE id=41"));
         assertTrue(speicher.hatOffeneSynchronisierungFuerZaehlerliste(41));
+    }
+
+    @Test public void downloadUndErneutesLadenErzeugenKeineKopfOderAbschlussaenderung() {
+        neuAnlegen();
+        speicher.initialisiereZaehlerlisten(Collections.singletonList(
+                new ZaehlerlisteDto(41,"Andere Anzeige","41","Test","",true,true)));
+        assertEquals(0,zahl("SELECT kopf_lokal_geaendert+abschluss_lokal_geaendert+lokale_revision FROM zaehlerliste WHERE id=41"));
+        assertFalse(speicher.ladeZaehlerlisteFuerId(41).istAbgeschlossen());
+        assertFalse(speicher.hatOffeneSynchronisierung());
+    }
+    @Test public void nichtBearbeiteteKopfparameterErhaltenGespeicherteNamen() {
+        neuAnlegen();
+        speicher.getWritableDatabase().execSQL("UPDATE zaehlerliste SET zaehler_name='Zaehler',schreiber_name='Schreiber' WHERE id=41");
+        List<Artikel> artikel=speicher.ladeArtikel(41);artikel.get(0).setZaehlMenge(0);
+        speicher.speichereZaehlmengen(41,null,null,artikel);
+        assertEquals("Zaehler",text("SELECT zaehler_name FROM zaehlerliste WHERE id=41"));
+        assertEquals("Schreiber",text("SELECT schreiber_name FROM zaehlerliste WHERE id=41"));
+        assertEquals(0,zahl("SELECT kopf_lokal_geaendert+abschluss_lokal_geaendert+lokale_revision FROM zaehlerliste WHERE id=41"));
+        assertEquals(1,zahl("SELECT menge_lokal_geaendert FROM artikel WHERE pos_nr=1"));
+    }
+    @Test public void ausdruecklichesLeerenIstEineEchteKopfaenderung() {
+        neuAnlegen();
+        speicher.getWritableDatabase().execSQL("UPDATE zaehlerliste SET zaehler_name='Zaehler',schreiber_name='Schreiber' WHERE id=41");
+        List<Artikel> artikel=speicher.ladeArtikel(41);
+        speicher.speichereZaehlmengen(41,"",null,artikel);
+        assertEquals("",text("SELECT zaehler_name FROM zaehlerliste WHERE id=41"));
+        assertEquals("Schreiber",text("SELECT schreiber_name FROM zaehlerliste WHERE id=41"));
+        assertEquals(1,zahl("SELECT kopf_lokal_geaendert FROM zaehlerliste WHERE id=41"));
+        assertEquals(1,zahl("SELECT lokale_revision FROM zaehlerliste WHERE id=41"));
+        String auftrag=text("SELECT geaendert_am FROM sync_warteschlange WHERE zaehlerlisten_id=41");
+        speicher.speichereZaehlmengen(41,"",null,artikel);
+        assertEquals(1,zahl("SELECT lokale_revision FROM zaehlerliste WHERE id=41"));
+        assertEquals(auftrag,text("SELECT geaendert_am FROM sync_warteschlange WHERE zaehlerlisten_id=41"));
+    }
+    @Test public void erneutOffenLassenIstVollstaendigUnveraendert() {
+        neuAnlegen();
+        assertTrue(speicher.markiereZaehlerlisteAlsOffen(41));
+        assertTrue(speicher.markiereZaehlerlisteAlsOffen(41));
+        assertEquals(0,zahl("SELECT kopf_lokal_geaendert+abschluss_lokal_geaendert+lokale_revision FROM zaehlerliste WHERE id=41"));
+        assertFalse(speicher.hatOffeneSynchronisierungFuerZaehlerliste(41));
+        assertEquals(0,zahl("SELECT COUNT(*) FROM zaehlerlisten_status WHERE zaehlerlisten_id=41"));
+    }
+    @Test public void bestaetigterAbschlussWirdNichtErneutBeauftragt() {
+        neuAnlegen();
+        speicher.getWritableDatabase().execSQL("UPDATE zaehlerliste SET abgeschlossen=1,lokale_revision=4 WHERE id=41");
+        assertTrue(speicher.markiereZaehlerlisteAlsAbgeschlossen(41));
+        assertTrue(speicher.markiereZaehlerlisteAlsAbgeschlossen(41));
+        assertEquals(4,zahl("SELECT lokale_revision FROM zaehlerliste WHERE id=41"));
+        assertEquals(0,zahl("SELECT abschluss_lokal_geaendert FROM zaehlerliste WHERE id=41"));
+        assertFalse(speicher.hatOffeneSynchronisierungFuerZaehlerliste(41));
+    }
+    @Test public void gleicherUnbestaetigterAbschlussErhaeltVorhandenenAuftrag() {
+        neuAnlegen();speicher.markiereZaehlerlisteAlsAbgeschlossen(41);
+        String auftrag=text("SELECT geaendert_am FROM sync_warteschlange WHERE zaehlerlisten_id=41");
+        speicher.markiereZaehlerlisteAlsAbgeschlossen(41);
+        assertEquals(1,zahl("SELECT abschluss_lokal_geaendert FROM zaehlerliste WHERE id=41"));
+        assertEquals(1,zahl("SELECT lokale_revision FROM zaehlerliste WHERE id=41"));
+        assertEquals(auftrag,text("SELECT geaendert_am FROM sync_warteschlange WHERE zaehlerlisten_id=41"));
+    }
+    @Test public void historischeKennzeichenWerdenDurchUnveraendertesSpeichernNichtGeloescht() {
+        neuAnlegen();
+        speicher.getWritableDatabase().execSQL("UPDATE zaehlerliste SET kopf_lokal_geaendert=1,abschluss_lokal_geaendert=1,lokale_revision=5 WHERE id=41");
+        speicher.merkeZaehlerlisteFuerSynchronisierung(41);
+        String auftrag=text("SELECT geaendert_am FROM sync_warteschlange WHERE zaehlerlisten_id=41");
+        speicher.speichereZaehlmengen(41,null,null,speicher.ladeArtikel(41));
+        speicher.markiereZaehlerlisteAlsOffen(41);
+        assertEquals(1,zahl("SELECT kopf_lokal_geaendert FROM zaehlerliste WHERE id=41"));
+        assertEquals(1,zahl("SELECT abschluss_lokal_geaendert FROM zaehlerliste WHERE id=41"));
+        assertEquals(5,zahl("SELECT lokale_revision FROM zaehlerliste WHERE id=41"));
+        assertEquals(auftrag,text("SELECT geaendert_am FROM sync_warteschlange WHERE zaehlerlisten_id=41"));
+        assertTrue(new ArtikelRepository(new MockInventurRemoteDataSource(),speicher).istHauptmenueRueckkehrErlaubt());
     }
 
     @Test public void wiederholteBearbeitungErhoehtRevisionOhneSchutzFreizugeben() {

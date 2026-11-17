@@ -322,7 +322,7 @@ public class ListenuebersichtRepositoryTest {
                                 ListenLadestatusAnzeige.formatiereUhrzeit(3_600_000L, java.util.TimeZone.getDefault())),
                         letzterAbruf.getText().toString());
                 TextView sperre = a.findViewById(R.id.syncStatusTextView);
-                assertEquals(a.getString(R.string.sync_status_sql_gesperrt), sperre.getText().toString());
+                assertEquals(a.getString(R.string.sync_status_erfolgreich),sperre.getText().toString());
             });
             assertEquals(Long.valueOf(3_600_000L), repository.holeLetztenErfolgreichenListenabrufMillis());
         } finally {

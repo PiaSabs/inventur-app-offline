@@ -11,10 +11,10 @@ import java.util.List;
 
 // Diese lokale Datenbank ist die Offline-Basis der App.
 // Morgen muss fuer API/Sync nur noch die Gegenstelle ergänzt werden.
-public class LokalerInventurSpeicher extends SQLiteOpenHelper {
+public class LokalerInventurSpeicher extends SQLiteOpenHelper implements EinzelpositionsSynchronisierung.Lokal {
 
     private static final String DATENBANK_NAME = "inventur_offline.db";
-    private static final int DATENBANK_VERSION = 11;
+    private static final int DATENBANK_VERSION = 13;
 
     private static final String TABELLE_ZAEHLERLISTE = "zaehlerliste";
     private static final String TABELLE_ARTIKEL = "artikel";
@@ -199,6 +199,8 @@ public class LokalerInventurSpeicher extends SQLiteOpenHelper {
         erstelleZaehlerlistenStatusTabelleFallsNoetig(db);
         erstelleSyncWarteschlangenTabelleFallsNoetig(db);
         ergaenzeLokaleAenderungsinformationen(db);
+        erstelleEinzelauftraege(db);
+        erstelleSqlIdentitaetszuordnung(db);
     }
 
     @Override
@@ -248,6 +250,411 @@ public class LokalerInventurSpeicher extends SQLiteOpenHelper {
         if (oldVersion < 11) {
             ergaenzeLokaleAenderungsinformationen(db);
         }
+        if (oldVersion < 12) erstelleEinzelauftraege(db);
+        if (oldVersion < 13) erstelleSqlIdentitaetszuordnung(db);
+    }
+
+    private void erstelleSqlIdentitaetszuordnung(SQLiteDatabase db) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS sql_identitaetszuordnung (blatt INTEGER NOT NULL,pos INTEGER NOT NULL,"
+                + "positions_id INTEGER NOT NULL UNIQUE,ergebnis_id INTEGER NOT NULL UNIQUE,artikel TEXT NOT NULL,"
+                + "datum_sql TEXT NOT NULL,zaehl_nr INTEGER NOT NULL,dat_inventur_sql TEXT,lokaler_stichtag TEXT NOT NULL,"
+                + "durchgang_bestaetigt INTEGER NOT NULL CHECK(durchgang_bestaetigt IN(0,1)),PRIMARY KEY(blatt,pos))");
+    }
+
+    synchronized SqlIdentitaetsZuordnung.Lokal ladeLokaleIdentitaetsposition(int blatt,int position) {
+        SQLiteDatabase db=getReadableDatabase();
+        try(Cursor c=mengenposition(db,blatt,position);
+            Cursor h=db.rawQuery("SELECT stichtag FROM zaehlerliste WHERE id=?",new String[]{String.valueOf(blatt)})) {
+            if(!h.moveToFirst())throw new IllegalArgumentException("Lokaler Listenkopf fehlt.");
+            String stichtag=h.getString(0);
+            StringBuilder daten=new StringBuilder(stichtag==null?"":stichtag);
+            for(int i=0;i<c.getColumnCount();i++) {
+                String wert=c.isNull(i)?null:c.getString(i);
+                daten.append('|').append(wert==null?-1:wert.length()).append(':').append(wert==null?"":wert);
+            }
+            String fingerprint;
+            try {
+                byte[] digest=java.security.MessageDigest.getInstance("SHA-256")
+                        .digest(daten.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                StringBuilder hex=new StringBuilder();for(byte b:digest)hex.append(String.format(java.util.Locale.ROOT,"%02x",b&255));
+                fingerprint=hex.toString();
+            } catch(java.security.NoSuchAlgorithmException e) {throw new IllegalStateException(e);}
+            int id=c.getColumnIndexOrThrow("sql_positions_id"),quellblatt=c.getColumnIndexOrThrow("quell_blattnummer");
+            return new SqlIdentitaetsZuordnung.Lokal(blatt,position,c.getString(c.getColumnIndexOrThrow("artikelnummer")),
+                    stichtag,c.getString(c.getColumnIndexOrThrow("quell_stichtag")),c.isNull(id)?null:c.getLong(id),
+                    c.isNull(quellblatt)?null:c.getInt(quellblatt),mengenwert(c),fingerprint);
+        }
+    }
+
+    synchronized void bestaetigeSqlIdentitaet(SqlIdentitaetsZuordnung.Vorschlag v,boolean durchgangBestaetigt) {
+        if(v==null || v.lokal.blatt<=0 || v.lokal.position<=0)throw new IllegalArgumentException("Eindeutiger Identitaetsvorschlag fehlt.");
+        SQLiteDatabase db=getWritableDatabase();db.beginTransaction();
+        try {
+            SqlIdentitaetsZuordnung.Lokal aktuell=ladeLokaleIdentitaetsposition(v.lokal.blatt,v.lokal.position);
+            if(!java.util.Objects.equals(aktuell.fingerprint,v.lokal.fingerprint))throw new IllegalArgumentException("Lokaler Stand inzwischen geaendert.");
+            if(durchgangBestaetigt && !v.stichtagGleich)throw new IllegalArgumentException("Durchgang ungeklärt.");
+            SqlServerMengenSchreibversuch.Ausgangsstand s=v.server;
+            try(Cursor c=db.rawQuery("SELECT 1 FROM artikel WHERE sql_positions_id=? AND NOT(zaehlerlisten_id=? AND pos_nr=?)",
+                    new String[]{String.valueOf(s.positionsId),String.valueOf(s.blatt),String.valueOf(s.position)})) {
+                if(c.moveToFirst())throw new IllegalArgumentException("SQL-Position bereits lokal anders zugeordnet.");
+            }
+            ContentValues m=new ContentValues();m.put("blatt",s.blatt);m.put("pos",s.position);
+            m.put("positions_id",s.positionsId);m.put("ergebnis_id",s.ergebnisId);m.put("artikel",s.artikel);
+            m.put("datum_sql",s.datum.toString());m.put("zaehl_nr",s.zaehlNr);
+            m.put("dat_inventur_sql",s.datInventur==null?null:s.datInventur.toString());
+            m.put("lokaler_stichtag",v.lokal.stichtag);m.put("durchgang_bestaetigt",durchgangBestaetigt?1:0);
+            try(Cursor c=db.rawQuery("SELECT 1 FROM sql_identitaetszuordnung WHERE blatt=? AND pos=?",mengenparameter(s.blatt,s.position))) {
+                if(c.moveToFirst()) {
+                    if(!hatSqlIdentitaetszuordnung(db,s,false))throw new IllegalArgumentException("Vorhandene Ergebniszuordnung widerspruechlich.");
+                    // Ohne Durchgangsbestaetigung darf nur die manuelle Freigabe widerrufen werden.
+                    if(db.update("sql_identitaetszuordnung",m,"blatt=? AND pos=?",mengenparameter(s.blatt,s.position))!=1)
+                        throw new IllegalStateException("Ergebniszuordnung nicht eindeutig.");
+                } else db.insertOrThrow("sql_identitaetszuordnung",null,m);
+            }
+            ContentValues a=new ContentValues();a.put("sql_positions_id",String.valueOf(s.positionsId));
+            a.put("quell_blattnummer",String.valueOf(s.blatt));a.put("quell_stichtag",s.datum.toString());
+            if(db.update("artikel",a,"zaehlerlisten_id=? AND pos_nr=?",mengenparameter(s.blatt,s.position))!=1)
+                throw new IllegalStateException("Lokale Position nicht eindeutig.");
+            // sync_unklar und bestaetigter_serverstand sind keine Identitaetsfelder und bleiben erhalten.
+            db.setTransactionSuccessful();
+        } finally {db.endTransaction();}
+    }
+
+    private boolean hatSqlIdentitaetszuordnung(SQLiteDatabase db,SqlServerMengenSchreibversuch.Ausgangsstand s,boolean durchgang) {
+        try(Cursor c=db.rawQuery("SELECT m.*,l.stichtag AS aktueller_stichtag FROM sql_identitaetszuordnung m "
+                + "JOIN zaehlerliste l ON l.id=m.blatt WHERE m.blatt=? AND m.pos=?",mengenparameter(s.blatt,s.position))) {
+            if(!c.moveToFirst())return false;
+            return c.getLong(c.getColumnIndexOrThrow("positions_id"))==s.positionsId
+                    && c.getLong(c.getColumnIndexOrThrow("ergebnis_id"))==s.ergebnisId
+                    && s.artikel.equals(c.getString(c.getColumnIndexOrThrow("artikel")))
+                    && s.datum.toString().equals(c.getString(c.getColumnIndexOrThrow("datum_sql")))
+                    && s.zaehlNr==c.getInt(c.getColumnIndexOrThrow("zaehl_nr"))
+                    && java.util.Objects.equals(s.datInventur==null?null:s.datInventur.toString(),c.getString(c.getColumnIndexOrThrow("dat_inventur_sql")))
+                    && java.util.Objects.equals(c.getString(c.getColumnIndexOrThrow("lokaler_stichtag")),c.getString(c.getColumnIndexOrThrow("aktueller_stichtag")))
+                    && (!durchgang || c.getInt(c.getColumnIndexOrThrow("durchgang_bestaetigt"))==1);
+        }
+    }
+
+    synchronized boolean istSqlDurchgangBestaetigt(SqlServerMengenSchreibversuch.Ausgangsstand s) {
+        return hatSqlIdentitaetszuordnung(getReadableDatabase(),s,true);
+    }
+
+    private void erstelleEinzelauftraege(SQLiteDatabase db) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS einzel_sync_auftrag (auftrag_id TEXT PRIMARY KEY, "
+                + "blatt_id INTEGER NOT NULL, pos_nr INTEGER NOT NULL, revision INTEGER NOT NULL, "
+                + "payload TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN "
+                + "('VORBEREITET','UNKLAR','KONFLIKT','BESTAETIGT')))");
+        db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS einzel_sync_offen ON einzel_sync_auftrag(blatt_id,pos_nr) "
+                + "WHERE status <> 'BESTAETIGT'");
+    }
+
+    synchronized void merkeBestaetigtenMengenAusgangsstand(EinzelpositionsSynchronisierung.Stand stand) {
+        SQLiteDatabase db = getWritableDatabase();
+        db.beginTransaction();
+        try (Cursor c = mengenposition(db, stand.blatt, stand.position)) {
+            pruefeMengenidentitaet(c, stand);
+            if (c.getInt(c.getColumnIndexOrThrow("menge_lokal_geaendert")) != 0
+                    || c.getInt(c.getColumnIndexOrThrow("notiz_lokal_geaendert")) != 0
+                    || !java.util.Objects.equals(mengenwert(c), stand.menge)) {
+                throw new IllegalArgumentException("Ausgangsstand kann lokale Aenderungen nicht nachtraeglich bestaetigen.");
+            }
+            ContentValues v = new ContentValues();
+            v.put("bestaetigter_serverstand", standJson(stand).toString());
+            db.update("artikel", v, "zaehlerlisten_id=? AND pos_nr=?", mengenparameter(stand.blatt, stand.position));
+            db.setTransactionSuccessful();
+        } finally { db.endTransaction(); }
+    }
+
+    synchronized String beschreibeOffeneEinzelfelder(int blatt) {
+        SQLiteDatabase db = getReadableDatabase();
+        String[] parameter = {String.valueOf(blatt)};
+        long mengen, notizen, kopf = 0, abschluss = 0;
+        try (Cursor c = db.rawQuery("SELECT COALESCE(SUM(CASE WHEN menge_lokal_geaendert<>0 THEN 1 ELSE 0 END),0), "
+                + "COALESCE(SUM(CASE WHEN notiz_lokal_geaendert<>0 THEN 1 ELSE 0 END),0) FROM artikel WHERE zaehlerlisten_id=?", parameter)) {
+            if (!c.moveToFirst()) throw new IllegalStateException("Lokaler Zustand fehlt.");
+            mengen = c.getLong(0); notizen = c.getLong(1);
+        }
+        try (Cursor c = db.rawQuery("SELECT kopf_lokal_geaendert,abschluss_lokal_geaendert FROM zaehlerliste WHERE id=?", parameter)) {
+            if (c.moveToFirst()) { kopf = c.getInt(0) == 0 ? 0 : 1; abschluss = c.getInt(1) == 0 ? 0 : 1; }
+        }
+        return "Unbestaetigte Mengen: " + mengen + "\nUnbestaetigte Notizen: " + notizen
+                + "\nOffene Kopfaenderungen: " + kopf + "\nOffene Abschlussaenderungen: " + abschluss
+                + (notizen > 0 ? "\nNotizen bleiben offen: nur lokal, keine Navigationssperre." : "")
+                + (kopf > 0 ? "\nKopfdaten bleiben offen: nur lokal, keine Navigationssperre." : "")
+                + (abschluss > 0 ? "\nAbschluss bleibt nur lokal: keine Navigationssperre." : "");
+    }
+
+    synchronized Integer ladeLokaleVersuchsmenge(SqlServerMengenSchreibversuch.Ausgangsstand s) {
+        return ladeLokaleVersuchsmenge(s,true);
+    }
+
+    synchronized Integer ladeLokaleVersuchsVorschau(SqlServerMengenSchreibversuch.Ausgangsstand s) {
+        return ladeLokaleVersuchsmenge(s,false);
+    }
+
+    private Integer ladeLokaleVersuchsmenge(SqlServerMengenSchreibversuch.Ausgangsstand s,boolean schreiben) {
+        try (Cursor c = mengenposition(getReadableDatabase(), s.blatt, s.position)) {
+            int id = c.getColumnIndexOrThrow("sql_positions_id");
+            int blatt = c.getColumnIndexOrThrow("quell_blattnummer");
+            if (c.isNull(id) || c.getLong(id) != s.positionsId || c.isNull(blatt) || c.getInt(blatt) != s.blatt
+                    || !s.artikel.equals(c.getString(c.getColumnIndexOrThrow("artikelnummer")))
+                    || (c.getInt(c.getColumnIndexOrThrow("sync_unklar")) != 0
+                        && !hatSqlIdentitaetszuordnung(getReadableDatabase(),s,schreiben))
+                    || c.getInt(c.getColumnIndexOrThrow("menge_lokal_geaendert")) == 0) {
+                throw new IllegalArgumentException("Keine eindeutig zugeordnete lokale Mengenänderung.");
+            }
+            // Ein Einzelversuch veraendert weder Revision noch Warteschlange oder Bestaetigungsstand.
+            return mengenwert(c);
+        }
+    }
+
+    @Override public synchronized EinzelpositionsSynchronisierung.Auftrag bereiteMengenauftragVor(int blatt, int position) {
+        SQLiteDatabase db = getWritableDatabase();
+        db.beginTransaction();
+        try {
+            try (Cursor offen = db.rawQuery("SELECT payload FROM einzel_sync_auftrag WHERE blatt_id=? "
+                    + "AND pos_nr=? AND status<>'BESTAETIGT'", mengenparameter(blatt, position))) {
+                if (offen.moveToFirst()) {
+                    EinzelpositionsSynchronisierung.Auftrag a = auftragAusJson(offen.getString(0));
+                    db.setTransactionSuccessful();
+                    return a;
+                }
+            }
+            try (Cursor c = mengenposition(db, blatt, position)) {
+                if (c.getInt(c.getColumnIndexOrThrow("menge_lokal_geaendert")) == 0) {
+                    db.setTransactionSuccessful(); return null;
+                }
+                EinzelpositionsSynchronisierung.Stand stand = standAusJson(c.getString(c.getColumnIndexOrThrow("bestaetigter_serverstand")));
+                pruefeMengenidentitaet(c, stand);
+                EinzelpositionsSynchronisierung.Auftrag a = new EinzelpositionsSynchronisierung.Auftrag(
+                        java.util.UUID.randomUUID().toString(), stand,
+                        c.getLong(c.getColumnIndexOrThrow("lokale_revision")), mengenwert(c));
+                ContentValues v = new ContentValues();
+                v.put("auftrag_id", a.id); v.put("blatt_id", blatt); v.put("pos_nr", position);
+                v.put("revision", a.lokaleRevision); v.put("payload", auftragJson(a).toString());
+                v.put("status", "VORBEREITET");
+                db.insertOrThrow("einzel_sync_auftrag", null, v);
+                db.setTransactionSuccessful(); return a;
+            }
+        } finally { db.endTransaction(); }
+    }
+
+    synchronized List<Integer> ladeGeaenderteMengenpositionen(int blatt) {
+        List<Integer> positionen=new ArrayList<>();
+        try(Cursor c=getReadableDatabase().rawQuery("SELECT pos_nr FROM artikel WHERE zaehlerlisten_id=? AND menge_lokal_geaendert<>0 ORDER BY pos_nr",
+                new String[]{String.valueOf(blatt)})) {while(c.moveToNext())positionen.add(c.getInt(0));}
+        return positionen;
+    }
+
+    synchronized List<Integer> ladeOffeneMengenpositionen(int blatt) {
+        List<Integer> positionen=new ArrayList<>();
+        try(Cursor c=getReadableDatabase().rawQuery(
+                "SELECT pos_nr FROM artikel WHERE zaehlerlisten_id=? AND menge_lokal_geaendert<>0 "
+                        + "UNION SELECT pos_nr FROM einzel_sync_auftrag WHERE blatt_id=? AND status<>'BESTAETIGT' ORDER BY pos_nr",
+                new String[]{String.valueOf(blatt),String.valueOf(blatt)})) {
+            while(c.moveToNext()) positionen.add(c.getInt(0));
+        }
+        return positionen;
+    }
+
+    synchronized List<Integer> ladeUngeklaerteMengenversuche(int blatt) {
+        List<Integer> positionen=new ArrayList<>();
+        try(Cursor c=getReadableDatabase().rawQuery(
+                "SELECT pos_nr FROM einzel_sync_auftrag WHERE blatt_id=? AND status='UNKLAR' ORDER BY pos_nr",
+                new String[]{String.valueOf(blatt)})) {
+            while(c.moveToNext()) positionen.add(c.getInt(0));
+        }
+        return positionen;
+    }
+
+    synchronized EinzelpositionsSynchronisierung.Auftrag legeEinfachenMengenauftragAn(
+            SqlServerMengenSchreibversuch.Ausgangsstand server,String fingerprint,Integer menge) {
+        SQLiteDatabase db=getWritableDatabase();db.beginTransaction();
+        try {
+            SqlIdentitaetsZuordnung.Lokal lokal=ladeLokaleIdentitaetsposition(server.blatt,server.position);
+            if(!java.util.Objects.equals(lokal.fingerprint,fingerprint) || !java.util.Objects.equals(lokal.menge,menge))
+                throw new IllegalArgumentException("Lokale Menge oder Revision inzwischen geaendert.");
+            ladeLokaleVersuchsmenge(server);
+            try(Cursor c=db.rawQuery("SELECT payload FROM einzel_sync_auftrag WHERE blatt_id=? AND pos_nr=? AND status<>'BESTAETIGT'",
+                    mengenparameter(server.blatt,server.position))) {
+                if(c.moveToFirst()) {EinzelpositionsSynchronisierung.Auftrag a=auftragAusJson(c.getString(0));db.setTransactionSuccessful();return a;}
+            }
+            EinzelpositionsSynchronisierung.Stand erwartet=SqlServerMengenSchreibversuch.alsMengenstand(server);
+            try(Cursor c=mengenposition(db,server.blatt,server.position)) {
+                String basis=c.getString(c.getColumnIndexOrThrow("bestaetigter_serverstand"));
+                if(basis!=null && !basis.trim().isEmpty() && !erwartet.equals(standAusJson(basis)))
+                    throw new IllegalArgumentException("SQL-Konflikt: Serverwert weicht vom zuletzt bestaetigten Stand ab.");
+                EinzelpositionsSynchronisierung.Auftrag a=new EinzelpositionsSynchronisierung.Auftrag(java.util.UUID.randomUUID().toString(),
+                        erwartet,c.getLong(c.getColumnIndexOrThrow("lokale_revision")),menge);
+                ContentValues v=new ContentValues();v.put("auftrag_id",a.id);v.put("blatt_id",server.blatt);v.put("pos_nr",server.position);
+                v.put("revision",a.lokaleRevision);v.put("payload",auftragJson(a).toString());v.put("status","VORBEREITET");
+                db.insertOrThrow("einzel_sync_auftrag",null,v);db.setTransactionSuccessful();return a;
+            }
+        }finally {db.endTransaction();}
+    }
+
+    synchronized void pruefeEinfachenMengenstand(SqlServerMengenSchreibversuch.Ausgangsstand server) {
+        ladeLokaleVersuchsmenge(server);
+        try(Cursor c=mengenposition(getReadableDatabase(),server.blatt,server.position)) {
+            String basis=c.getString(c.getColumnIndexOrThrow("bestaetigter_serverstand"));
+            if(basis!=null && !basis.trim().isEmpty() && !SqlServerMengenSchreibversuch.alsMengenstand(server).equals(standAusJson(basis)))
+                throw new IllegalArgumentException("SQL-Konflikt: Serverwert unerwartet veraendert.");
+        }
+        try(Cursor c=getReadableDatabase().rawQuery("SELECT status FROM einzel_sync_auftrag WHERE blatt_id=? AND pos_nr=? AND status<>'BESTAETIGT'",
+                mengenparameter(server.blatt,server.position))) {
+            if(c.moveToFirst() && !"VORBEREITET".equals(c.getString(0)))
+                throw new IllegalArgumentException("Frueherer Versuch offen oder konfliktbehaftet. Keine automatische Wiederholung.");
+        }
+    }
+
+    @Override public synchronized EinzelpositionsSynchronisierung.Status pruefeEinmalversuch(EinzelpositionsSynchronisierung.Auftrag a) {
+        try(Cursor c=getReadableDatabase().rawQuery("SELECT status,payload FROM einzel_sync_auftrag WHERE auftrag_id=?",new String[]{a.id})) {
+            if(!c.moveToFirst() || !a.equals(auftragAusJson(c.getString(1))))return EinzelpositionsSynchronisierung.Status.AUSSTEHEND;
+            if("KONFLIKT".equals(c.getString(0)))return EinzelpositionsSynchronisierung.Status.KONFLIKT;
+            if(!"VORBEREITET".equals(c.getString(0)))return EinzelpositionsSynchronisierung.Status.AUSSTEHEND;
+        }
+        try {
+            SqlServerMengenSchreibversuch.Ausgangsstand s=SqlServerMengenSchreibversuch.ausMengenstand(a.erwartet);
+            if(!java.util.Objects.equals(ladeLokaleVersuchsmenge(s),a.menge))return EinzelpositionsSynchronisierung.Status.AUSSTEHEND;
+            try(Cursor c=mengenposition(getReadableDatabase(),s.blatt,s.position)) {
+                if(c.getLong(c.getColumnIndexOrThrow("lokale_revision"))!=a.lokaleRevision)return EinzelpositionsSynchronisierung.Status.AUSSTEHEND;
+            }
+            return EinzelpositionsSynchronisierung.Status.NICHTS_ZU_TUN;
+        }catch(IllegalArgumentException e){return EinzelpositionsSynchronisierung.Status.ZUORDNUNG_UNGEKLAERT;}
+    }
+
+    synchronized boolean hatEinfachenMengenNachweis(int blatt) {
+        try(Cursor c=getReadableDatabase().rawQuery("SELECT payload FROM einzel_sync_auftrag WHERE blatt_id=? AND status='BESTAETIGT'",
+                new String[]{String.valueOf(blatt)})) {
+            while(c.moveToNext()) {
+                EinzelpositionsSynchronisierung.Auftrag a=auftragAusJson(c.getString(0));
+                if(a.erwartet.token.startsWith(SqlServerMengenSchreibversuch.MENGEN_TOKEN)
+                        && !java.util.Objects.equals(a.erwartet.menge,a.menge))return true;
+            }
+        }
+        return false;
+    }
+
+    @Override public synchronized void merkeMengenversuch(EinzelpositionsSynchronisierung.Auftrag a) {
+        mengenauftragsstatus(a, "UNKLAR");
+    }
+
+    @Override public synchronized void merkeMengenkonflikt(EinzelpositionsSynchronisierung.Auftrag a) {
+        mengenauftragsstatus(a, "KONFLIKT");
+    }
+
+    private void mengenauftragsstatus(EinzelpositionsSynchronisierung.Auftrag a, String status) {
+        ContentValues v = new ContentValues(); v.put("status", status);
+        int anzahl = getWritableDatabase().update("einzel_sync_auftrag", v,
+                "auftrag_id=? AND payload=? AND status<>'BESTAETIGT'", new String[]{a.id, auftragJson(a).toString()});
+        if (anzahl != 1) throw new IllegalArgumentException("Dauerhafter Mengenauftrag fehlt.");
+    }
+
+    @Override public synchronized void quittiereMengenauftrag(EinzelpositionsSynchronisierung.Auftrag a,
+            EinzelpositionsSynchronisierung.Stand gespeichert) {
+        boolean einfacherGleichstand=a.erwartet.token.startsWith(SqlServerMengenSchreibversuch.MENGEN_TOKEN)
+                && java.util.Objects.equals(a.menge,a.erwartet.menge);
+        if (!a.erwartet.gleicheZuordnung(gespeichert) || (a.erwartet.token.equals(gespeichert.token) && !einfacherGleichstand)
+                || !java.util.Objects.equals(a.menge, gespeichert.menge)) {
+            throw new IllegalArgumentException("Quittierung passt nicht zum Mengenauftrag.");
+        }
+        SQLiteDatabase db = getWritableDatabase();
+        db.beginTransaction();
+        try {
+            try (Cursor op = db.rawQuery("SELECT payload,status FROM einzel_sync_auftrag WHERE auftrag_id=?", new String[]{a.id})) {
+                if (!op.moveToFirst() || !a.equals(auftragAusJson(op.getString(0)))) {
+                    throw new IllegalArgumentException("Mengenauftrag stimmt nicht ueberein.");
+                }
+                if ("BESTAETIGT".equals(op.getString(1))) { db.setTransactionSuccessful(); return; }
+            }
+            try (Cursor c = mengenposition(db, a.erwartet.blatt, a.erwartet.position)) {
+                pruefeMengenidentitaet(c, a.erwartet);
+                String basis=c.getString(c.getColumnIndexOrThrow("bestaetigter_serverstand"));
+                boolean ersterEinfacherStand=(basis==null || basis.trim().isEmpty())
+                        && a.erwartet.token.startsWith(SqlServerMengenSchreibversuch.MENGEN_TOKEN)
+                        && hatSqlIdentitaetszuordnung(db,SqlServerMengenSchreibversuch.ausMengenstand(a.erwartet),true);
+                if (!ersterEinfacherStand && !a.erwartet.equals(standAusJson(basis))) {
+                    throw new IllegalArgumentException("Lokaler Ausgangsstand hat sich geaendert.");
+                }
+                ContentValues v = new ContentValues();
+                v.put("bestaetigter_serverstand", standJson(gespeichert).toString());
+                if (c.getLong(c.getColumnIndexOrThrow("lokale_revision")) == a.lokaleRevision
+                        && java.util.Objects.equals(mengenwert(c), a.menge)) v.put("menge_lokal_geaendert", 0);
+                db.update("artikel", v, "zaehlerlisten_id=? AND pos_nr=?",
+                        mengenparameter(a.erwartet.blatt, a.erwartet.position));
+            }
+            ContentValues status = new ContentValues(); status.put("status", "BESTAETIGT");
+            db.update("einzel_sync_auftrag", status, "auftrag_id=?", new String[]{a.id});
+            // Notizen, Kopf und Abschluss besitzen weiterhin keinen SQL-Speichervertrag.
+            db.delete("sync_warteschlange", "zaehlerlisten_id=? "
+                    + "AND NOT EXISTS(SELECT 1 FROM artikel WHERE zaehlerlisten_id=? AND "
+                    + "(menge_lokal_geaendert<>0 OR notiz_lokal_geaendert<>0)) "
+                    + "AND NOT EXISTS(SELECT 1 FROM zaehlerliste WHERE id=? AND "
+                    + "(kopf_lokal_geaendert<>0 OR abschluss_lokal_geaendert<>0)) "
+                    + "AND NOT EXISTS(SELECT 1 FROM einzel_sync_auftrag WHERE blatt_id=? AND status<>'BESTAETIGT')",
+                    new String[]{String.valueOf(a.erwartet.blatt), String.valueOf(a.erwartet.blatt),
+                            String.valueOf(a.erwartet.blatt), String.valueOf(a.erwartet.blatt)});
+            db.setTransactionSuccessful();
+        } finally { db.endTransaction(); }
+    }
+
+    private static String[] mengenparameter(int blatt, int position) {
+        return new String[]{String.valueOf(blatt), String.valueOf(position)};
+    }
+
+    private Cursor mengenposition(SQLiteDatabase db, int blatt, int position) {
+        Cursor c = db.rawQuery("SELECT * FROM artikel WHERE zaehlerlisten_id=? AND pos_nr=?", mengenparameter(blatt, position));
+        if (!c.moveToFirst() || c.getCount() != 1) { c.close(); throw new IllegalArgumentException("Lokale Position fehlt."); }
+        return c;
+    }
+
+    private Integer mengenwert(Cursor c) {
+        int i = c.getColumnIndexOrThrow("zaehl_menge"); return c.isNull(i) ? null : c.getInt(i);
+    }
+
+    private void pruefeMengenidentitaet(Cursor c, EinzelpositionsSynchronisierung.Stand s) {
+        int quellId = c.getColumnIndexOrThrow("sql_positions_id"), blatt = c.getColumnIndexOrThrow("quell_blattnummer");
+        if (c.isNull(quellId) || c.isNull(blatt) || c.getLong(quellId) != s.positionsId
+                || c.getInt(blatt) != s.blatt || c.getInt(c.getColumnIndexOrThrow("zaehlerlisten_id")) != s.blatt
+                || c.getInt(c.getColumnIndexOrThrow("pos_nr")) != s.position
+                || !s.artikel.equals(c.getString(c.getColumnIndexOrThrow("artikelnummer")))) {
+            throw new IllegalArgumentException("SQL-Ergebniszuordnung ist nicht nachgewiesen.");
+        }
+    }
+
+    private org.json.JSONObject standJson(EinzelpositionsSynchronisierung.Stand s) {
+        try {
+            return new org.json.JSONObject().put("typ", "einzelmenge-v1").put("blatt", s.blatt)
+                    .put("position", s.position).put("positionsId", s.positionsId).put("ergebnisId", s.ergebnisId)
+                    .put("artikel", s.artikel).put("durchgang", s.durchgang).put("token", s.token)
+                    .put("menge", s.menge == null ? org.json.JSONObject.NULL : s.menge);
+        } catch (org.json.JSONException e) { throw new IllegalArgumentException("Mengenstand ungueltig."); }
+    }
+
+    private EinzelpositionsSynchronisierung.Stand standAusJson(String text) {
+        try {
+            org.json.JSONObject j = new org.json.JSONObject(text);
+            if (!"einzelmenge-v1".equals(j.getString("typ")) || !j.has("menge")) throw new IllegalArgumentException();
+            return new EinzelpositionsSynchronisierung.Stand(j.getInt("blatt"), j.getInt("position"),
+                    j.getLong("positionsId"), j.getLong("ergebnisId"), j.getString("artikel"),
+                    j.getString("durchgang"), j.getString("token"), j.isNull("menge") ? null : j.getInt("menge"));
+        } catch (org.json.JSONException | NullPointerException e) { throw new IllegalArgumentException("Bestaetigter Mengenstand fehlt."); }
+    }
+
+    private org.json.JSONObject auftragJson(EinzelpositionsSynchronisierung.Auftrag a) {
+        try {
+            return new org.json.JSONObject().put("id", a.id).put("erwartet", standJson(a.erwartet))
+                    .put("revision", a.lokaleRevision).put("menge", a.menge == null ? org.json.JSONObject.NULL : a.menge);
+        } catch (org.json.JSONException e) { throw new IllegalArgumentException("Mengenauftrag ungueltig."); }
+    }
+
+    private EinzelpositionsSynchronisierung.Auftrag auftragAusJson(String text) {
+        try {
+            org.json.JSONObject j = new org.json.JSONObject(text);
+            if (!j.has("menge")) throw new IllegalArgumentException();
+            return new EinzelpositionsSynchronisierung.Auftrag(j.getString("id"), standAusJson(j.getJSONObject("erwartet").toString()),
+                    j.getLong("revision"), j.isNull("menge") ? null : j.getInt("menge"));
+        } catch (org.json.JSONException e) { throw new IllegalArgumentException("Dauerhafter Mengenauftrag ungueltig."); }
     }
 
     private void ergaenzeLokaleAenderungsinformationen(SQLiteDatabase db) {
@@ -344,10 +751,12 @@ public class LokalerInventurSpeicher extends SQLiteOpenHelper {
         SQLiteDatabase db = getWritableDatabase();
         db.beginTransaction();
         try {
-            try (Cursor kopf = db.rawQuery("SELECT abgeschlossen FROM zaehlerliste WHERE id = ?",
+            String kopfStichtag="";
+            try (Cursor kopf = db.rawQuery("SELECT abgeschlossen,stichtag FROM zaehlerliste WHERE id = ?",
                     new String[]{String.valueOf(zaehlerlistenId)})) {
                 if (kopf.moveToFirst()) {
                     if (kopf.getInt(0) != 0) return;
+                    kopfStichtag=kopf.getString(1);
                 } else if (!quellIds.isEmpty()) {
                     throw new IllegalArgumentException("Lokale Blattzuordnung fehlt.");
                 }
@@ -389,12 +798,37 @@ public class LokalerInventurSpeicher extends SQLiteOpenHelper {
                 String vorhandeneAnmerkung = ladeArtikelAnmerkung(db, zaehlerlistenId, artikel.getPositionsNummer(), artikel.getArtikelnummer());
                 String anmerkung = istLeer(artikel.getAnmerkung()) ? vorhandeneAnmerkung : artikel.getAnmerkung();
                 values.put("anmerkung", anmerkung);
+                SqlServerMengenSchreibversuch.Ausgangsstand quelle=artikel.getSqlErgebnis();
+                boolean eindeutig=quelle!=null && SqlIdentitaetsZuordnung.stichtageGleich(kopfStichtag,quelle.datum.toString());
+                if(quelle!=null)values.put("quell_stichtag",quelle.datum.toString());
+                if(eindeutig) {
+                    values.put("sync_unklar",0);
+                    values.put("bestaetigter_serverstand",standJson(SqlServerMengenSchreibversuch.alsMengenstand(quelle)).toString());
+                }
                 db.insertOrThrow(TABELLE_ARTIKEL, null, values);
+                if(quelle!=null) {
+                    ContentValues zuordnung=new ContentValues();
+                    zuordnung.put("blatt",quelle.blatt);zuordnung.put("pos",quelle.position);zuordnung.put("positions_id",quelle.positionsId);
+                    zuordnung.put("ergebnis_id",quelle.ergebnisId);zuordnung.put("artikel",quelle.artikel);
+                    zuordnung.put("datum_sql",quelle.datum.toString());zuordnung.put("zaehl_nr",quelle.zaehlNr);
+                    zuordnung.put("dat_inventur_sql",quelle.datInventur==null?null:quelle.datInventur.toString());
+                    zuordnung.put("lokaler_stichtag",kopfStichtag);zuordnung.put("durchgang_bestaetigt",eindeutig?1:0);
+                    db.insertOrThrow("sql_identitaetszuordnung",null,zuordnung);
+                }
             }
             db.setTransactionSuccessful();
         } finally {
             db.endTransaction();
         }
+    }
+
+    synchronized void speichereErstdownload(ZaehlerlisteDto kopf,List<ArtikelDto> artikel) {
+        SQLiteDatabase db=getWritableDatabase();db.beginTransaction();
+        try {
+            initialisiereZaehlerlisten(java.util.Collections.singletonList(kopf));
+            initialisiereArtikel(kopf.getId(),artikel);
+            db.setTransactionSuccessful();
+        }finally{db.endTransaction();}
     }
 
     // Ausschliesslich vom lokalen Mock-Pfad aufgerufen. Vorhandene Zeilen nie ersetzen.
@@ -529,13 +963,19 @@ public class LokalerInventurSpeicher extends SQLiteOpenHelper {
         SQLiteDatabase db = getWritableDatabase();
         db.beginTransaction();
         try {
-            String zaehler = zaehlerName == null ? "" : zaehlerName;
-            String schreiber = schreiberName == null ? "" : schreiberName;
+            String zaehler = zaehlerName;
+            String schreiber = schreiberName;
             boolean abgeschlossen;
-            try (Cursor kopf = db.rawQuery("SELECT abgeschlossen FROM zaehlerliste WHERE id = ?",
+            boolean geaendert;
+            try (Cursor kopf = db.rawQuery("SELECT abgeschlossen,zaehler_name,schreiber_name FROM zaehlerliste WHERE id = ?",
                     new String[]{String.valueOf(zaehlerlistenId)})) {
                 if (!kopf.moveToFirst()) throw new IllegalArgumentException("Zaehlerliste fehlt lokal.");
                 abgeschlossen = kopf.getInt(0) != 0;
+                // null bedeutet nicht bearbeitet; ein leerer Text bleibt eine ausdrückliche Eingabe.
+                if (zaehler == null) zaehler = kopf.getString(1);
+                if (schreiber == null) schreiber = kopf.getString(2);
+                geaendert = !java.util.Objects.equals(zaehler,kopf.getString(1))
+                        || !java.util.Objects.equals(schreiber,kopf.getString(2));
             }
             db.execSQL("UPDATE zaehlerliste SET zaehler_name = ?, schreiber_name = ?, "
                             + "kopf_lokal_geaendert = 1, lokale_revision = lokale_revision + 1 "
@@ -565,6 +1005,7 @@ public class LokalerInventurSpeicher extends SQLiteOpenHelper {
                     boolean mengeGeaendert = !java.util.Objects.equals(menge, artikel.getZaehlMenge());
                     boolean notizGeaendert = !java.util.Objects.equals(position.getString(2), artikel.getAnmerkung());
                     if (!mengeGeaendert && !notizGeaendert) continue;
+                    geaendert = true;
                     // Die Revision steigt nur bei einer tatsaechlichen Aenderung.
                     db.execSQL("UPDATE artikel SET zaehl_menge = ?, anmerkung = ?, "
                                     + "menge_lokal_geaendert = MAX(menge_lokal_geaendert, ?), "
@@ -574,7 +1015,8 @@ public class LokalerInventurSpeicher extends SQLiteOpenHelper {
                                     notizGeaendert ? 1 : 0, zaehlerlistenId, position.getInt(0)});
                 }
             }
-            merkeZaehlerlisteFuerSynchronisierung(db, zaehlerlistenId);
+            // Eine unveraenderte Vorschau darf einen vorhandenen Auftrag nicht neu datieren.
+            if (geaendert) merkeZaehlerlisteFuerSynchronisierung(db, zaehlerlistenId);
             db.setTransactionSuccessful();
         } finally {
             db.endTransaction();
@@ -638,16 +1080,68 @@ public class LokalerInventurSpeicher extends SQLiteOpenHelper {
         }
     }
 
+    public synchronized boolean hatUnbestaetigteLokaleAenderungen() {
+        SQLiteDatabase db = getReadableDatabase();
+        // Revisionsnummern beschreiben auch die Historie; offene Kennzeichen und Auftraege sperren.
+        try (Cursor cursor = db.rawQuery("SELECT 1 FROM sync_warteschlange "
+                + "UNION ALL SELECT 1 FROM artikel WHERE "
+                + "menge_lokal_geaendert <> 0 OR notiz_lokal_geaendert <> 0 "
+                + "UNION ALL SELECT 1 FROM zaehlerliste WHERE "
+                + "kopf_lokal_geaendert <> 0 OR abschluss_lokal_geaendert <> 0 LIMIT 1", null)) {
+            return cursor.moveToFirst();
+        }
+    }
+
+    public synchronized boolean hatOffeneMengensynchronisierung(Integer blattId) {
+        String artikel = blattId == null ? "" : " AND zaehlerlisten_id=?";
+        String auftrag = blattId == null ? "" : " AND blatt_id=?";
+        // Listenauftraege und andere lokale Felder werden weder geloescht noch quittiert.
+        try (Cursor c = getReadableDatabase().rawQuery(
+                "SELECT 1 FROM artikel WHERE menge_lokal_geaendert<>0" + artikel
+                        + " UNION ALL SELECT 1 FROM einzel_sync_auftrag WHERE status<>'BESTAETIGT'"
+                        + auftrag + " LIMIT 1",
+                blattId == null ? null : new String[]{String.valueOf(blattId), String.valueOf(blattId)})) {
+            return c.moveToFirst();
+        }
+    }
+
+    public synchronized Synchronisierungsdiagnose ladeSynchronisierungsdiagnose(Integer blattId) {
+        String id = blattId == null ? null : String.valueOf(blattId);
+        String artikelauswahl = blattId == null ? "1=1" : "zaehlerlisten_id = ?";
+        String kopfauswahl = blattId == null ? "1=1" : "id = ?";
+        // Eine einzige Abfrage liefert einen konsistenten, ausschliesslich lesenden Zaehlerstand.
+        String sql = "WITH a AS (SELECT * FROM artikel WHERE " + artikelauswahl + "), "
+                + "z AS (SELECT * FROM zaehlerliste WHERE " + kopfauswahl + ") SELECT "
+                + "(SELECT COUNT(*) FROM sync_warteschlange WHERE " + artikelauswahl + "), "
+                + "(SELECT COUNT(*) FROM a WHERE menge_lokal_geaendert <> 0 OR notiz_lokal_geaendert <> 0), "
+                + "(SELECT COUNT(*) FROM z WHERE kopf_lokal_geaendert <> 0 OR abschluss_lokal_geaendert <> 0), "
+                + "(SELECT COUNT(*) FROM a WHERE sync_unklar <> 0 AND "
+                + "(sql_positions_id IS NULL OR quell_blattnummer IS NULL)), "
+                + "(SELECT COUNT(*) FROM a WHERE lokale_revision > 0), "
+                + "(SELECT COUNT(*) FROM z WHERE lokale_revision > 0), "
+                + "((SELECT COUNT(*) FROM a WHERE lokale_revision > 0 AND menge_lokal_geaendert = 0 "
+                + "AND notiz_lokal_geaendert = 0) + (SELECT COUNT(*) FROM z WHERE lokale_revision > 0 "
+                + "AND kopf_lokal_geaendert = 0 AND abschluss_lokal_geaendert = 0)), "
+                + "((SELECT COUNT(*) FROM a WHERE TRIM(COALESCE(bestaetigter_serverstand, '')) <> '') "
+                + "+ (SELECT COUNT(*) FROM z WHERE TRIM(COALESCE(bestaetigter_serverstand, '')) <> ''))";
+        try (Cursor c = getReadableDatabase().rawQuery(sql, blattId == null ? null : new String[]{id, id, id})) {
+            if (!c.moveToFirst()) throw new IllegalStateException("Lokaler Diagnosestand fehlt.");
+            return new Synchronisierungsdiagnose(c.getLong(0), c.getLong(1), c.getLong(2), c.getLong(3),
+                    c.getLong(4), c.getLong(5), c.getLong(6), c.getLong(7));
+        }
+    }
+
     public synchronized boolean hatOffeneSynchronisierungFuerZaehlerliste(int zaehlerlistenId) {
         SQLiteDatabase db = getReadableDatabase();
-        Cursor cursor = db.rawQuery(
-                "SELECT COUNT(*) FROM " + TABELLE_SYNC_WARTESCHLANGE + " WHERE zaehlerlisten_id = ?",
-                new String[]{String.valueOf(zaehlerlistenId)}
-        );
-        try {
-            return cursor.moveToFirst() && cursor.getInt(0) > 0;
-        } finally {
-            cursor.close();
+        String id = String.valueOf(zaehlerlistenId);
+        try (Cursor cursor = db.rawQuery("SELECT 1 FROM sync_warteschlange WHERE zaehlerlisten_id=? "
+                + "UNION ALL SELECT 1 FROM artikel WHERE zaehlerlisten_id=? AND "
+                + "(menge_lokal_geaendert<>0 OR notiz_lokal_geaendert<>0) "
+                + "UNION ALL SELECT 1 FROM zaehlerliste WHERE id=? AND "
+                + "(kopf_lokal_geaendert<>0 OR abschluss_lokal_geaendert<>0) "
+                + "UNION ALL SELECT 1 FROM einzel_sync_auftrag WHERE blatt_id=? AND status<>'BESTAETIGT' LIMIT 1",
+                new String[]{id, id, id, id})) {
+            return cursor.moveToFirst();
         }
     }
 
@@ -666,11 +1160,14 @@ public class LokalerInventurSpeicher extends SQLiteOpenHelper {
             try (Cursor kopf = db.rawQuery("SELECT abgeschlossen FROM zaehlerliste WHERE id = ?",
                     new String[]{String.valueOf(zaehlerlistenId)})) {
                 if (!kopf.moveToFirst()) return false;
-                if ((kopf.getInt(0) != 0) != abgeschlossen) {
-                    db.execSQL("UPDATE zaehlerliste SET abgeschlossen = ?, abschluss_lokal_geaendert = 1, "
-                                    + "lokale_revision = lokale_revision + 1 WHERE id = ?",
-                            new Object[]{abgeschlossen ? 1 : 0, zaehlerlistenId});
+                if ((kopf.getInt(0) != 0) == abgeschlossen) {
+                    // Ein unveränderter Status erzeugt weder Auftrag noch neue Bestätigung.
+                    db.setTransactionSuccessful();
+                    return true;
                 }
+                db.execSQL("UPDATE zaehlerliste SET abgeschlossen = ?, abschluss_lokal_geaendert = 1, "
+                                + "lokale_revision = lokale_revision + 1 WHERE id = ?",
+                        new Object[]{abgeschlossen ? 1 : 0, zaehlerlistenId});
             }
             speichereZaehlerlistenStatus(db, zaehlerlistenId, null, null, abgeschlossen);
             merkeZaehlerlisteFuerSynchronisierung(db, zaehlerlistenId);
@@ -847,65 +1344,7 @@ public class LokalerInventurSpeicher extends SQLiteOpenHelper {
         }
     }
 
-    public synchronized InventurBereichInfo ladeInventurBereichFuerNummer(int inventurBereichNr) {
-        SQLiteDatabase db = getReadableDatabase();
-        Cursor cursor = db.query(
-                TABELLE_INVENTUR_BREICHE,
-                new String[]{"inv_bereich_nr", "inv_bereich_name", "zaehler", "schreiber", "sonstiges", "ab_blatt_nr"},
-                "inv_bereich_nr = ?",
-                new String[]{String.valueOf(inventurBereichNr)},
-                null,
-                null,
-                null
-        );
 
-        try {
-            if (!cursor.moveToFirst()) {
-                return null;
-            }
-            return new InventurBereichInfo(
-                    cursor.getInt(cursor.getColumnIndexOrThrow("inv_bereich_nr")),
-                    cursor.getString(cursor.getColumnIndexOrThrow("inv_bereich_name")),
-                    cursor.getString(cursor.getColumnIndexOrThrow("zaehler")),
-                    cursor.getString(cursor.getColumnIndexOrThrow("schreiber")),
-                    cursor.getString(cursor.getColumnIndexOrThrow("sonstiges")),
-                    cursor.getInt(cursor.getColumnIndexOrThrow("ab_blatt_nr"))
-            );
-        } finally {
-            cursor.close();
-        }
-    }
-
-    public synchronized List<InventurBereichInfo> ladeAlleInventurBereiche() {
-        List<InventurBereichInfo> inventurBereiche = new ArrayList<>();
-        SQLiteDatabase db = getReadableDatabase();
-        Cursor cursor = db.query(
-                TABELLE_INVENTUR_BREICHE,
-                new String[]{"inv_bereich_nr", "inv_bereich_name", "zaehler", "schreiber", "sonstiges", "ab_blatt_nr"},
-                null,
-                null,
-                null,
-                null,
-                "ab_blatt_nr ASC"
-        );
-
-        try {
-            while (cursor.moveToNext()) {
-                inventurBereiche.add(new InventurBereichInfo(
-                        cursor.getInt(cursor.getColumnIndexOrThrow("inv_bereich_nr")),
-                        cursor.getString(cursor.getColumnIndexOrThrow("inv_bereich_name")),
-                        cursor.getString(cursor.getColumnIndexOrThrow("zaehler")),
-                        cursor.getString(cursor.getColumnIndexOrThrow("schreiber")),
-                        cursor.getString(cursor.getColumnIndexOrThrow("sonstiges")),
-                        cursor.getInt(cursor.getColumnIndexOrThrow("ab_blatt_nr"))
-                ));
-            }
-        } finally {
-            cursor.close();
-        }
-
-        return inventurBereiche;
-    }
 
     public synchronized List<BearbeiterInfo> ladeBearbeiterFuerFirmenMitTelefon(List<String> firmenFilter) {
         List<BearbeiterInfo> bearbeiter = new ArrayList<>();
@@ -964,22 +1403,6 @@ public class LokalerInventurSpeicher extends SQLiteOpenHelper {
         return bearbeiter;
     }
 
-    public synchronized String ladeAktuellenStichtagFuerBlatt(int blattNr, String datumGrenze) {
-        SQLiteDatabase db = getReadableDatabase();
-        Cursor cursor = db.rawQuery(
-                "SELECT MAX(datum) FROM " + TABELLE_BESTANDSZAEHLUNGEN + " WHERE blatt_nr = ? AND datum > ?",
-                new String[]{String.valueOf(blattNr), datumGrenze}
-        );
-
-        try {
-            if (!cursor.moveToFirst() || cursor.isNull(0)) {
-                return null;
-            }
-            return cursor.getString(0);
-        } finally {
-            cursor.close();
-        }
-    }
 
     public synchronized boolean hatBestandszaehlungenFuerBlattUndDatum(int blattNr, String datum) {
         SQLiteDatabase db = getReadableDatabase();
@@ -1051,77 +1474,7 @@ public class LokalerInventurSpeicher extends SQLiteOpenHelper {
         }
     }
 
-    public synchronized List<ArtikelDto> ladeArtikelAusBestandszaehlungen(int blattNr, String datum) {
-        List<ArtikelDto> artikelListe = new ArrayList<>();
-        SQLiteDatabase db = getReadableDatabase();
-        Cursor cursor = db.rawQuery(
-                "SELECT b.pos_nr, b.ident_nr_bestand, b.lagerort, b.menge, b.letzte_zaehlmenge, b.menge_lager, " +
-                        "t.bezeichnung1, t.bezeichnung2, t.mindestbestand " +
-                        "FROM " + TABELLE_BESTANDSZAEHLUNGEN + " b " +
-                        "LEFT JOIN " + TABELLE_TEILESTAMM + " t ON t.identnummer = b.ident_nr_bestand " +
-                        "WHERE b.blatt_nr = ? AND b.datum = ? " +
-                        "ORDER BY b.pos_nr ASC",
-                new String[]{String.valueOf(blattNr), datum}
-        );
 
-        try {
-            while (cursor.moveToNext()) {
-                String bezeichnung1 = cursor.getString(cursor.getColumnIndexOrThrow("bezeichnung1"));
-                String bezeichnung2 = cursor.getString(cursor.getColumnIndexOrThrow("bezeichnung2"));
-                String bezeichnung = kombiniereBezeichnung(bezeichnung1, bezeichnung2, cursor.getString(cursor.getColumnIndexOrThrow("ident_nr_bestand")));
-                Integer zaehlMenge = cursor.isNull(cursor.getColumnIndexOrThrow("menge_lager"))
-                        ? null
-                        : Math.round(cursor.getFloat(cursor.getColumnIndexOrThrow("menge_lager")));
-
-                artikelListe.add(new ArtikelDto(
-                        cursor.getInt(cursor.getColumnIndexOrThrow("pos_nr")),
-                        cursor.getString(cursor.getColumnIndexOrThrow("ident_nr_bestand")),
-                        bezeichnung,
-                        cursor.getString(cursor.getColumnIndexOrThrow("lagerort")),
-                        Math.round(cursor.getFloat(cursor.getColumnIndexOrThrow("menge"))),
-                        leseGanzzahlOderNull(cursor, "letzte_zaehlmenge", null),
-                        leseGanzzahlOderNull(cursor, "mindestbestand", 0),
-                        zaehlMenge,
-                        ""
-                ));
-            }
-        } finally {
-            cursor.close();
-        }
-        return artikelListe;
-    }
-
-    public synchronized void aktualisiereBestandszaehlmengen(int blattNr, String datum, List<Artikel> artikelListe) {
-        if (artikelListe == null || artikelListe.isEmpty()) {
-            return;
-        }
-
-        SQLiteDatabase db = getWritableDatabase();
-        db.beginTransaction();
-        try {
-            for (Artikel artikel : artikelListe) {
-                ContentValues values = new ContentValues();
-                if (artikel.getZaehlMenge() == null) {
-                    values.putNull("menge_lager");
-                } else {
-                    values.put("menge_lager", artikel.getZaehlMenge());
-                }
-                db.update(
-                        TABELLE_BESTANDSZAEHLUNGEN,
-                        values,
-                        artikel.getPositionsNummer() > 0
-                                ? "blatt_nr = ? AND datum = ? AND pos_nr = ?"
-                                : "blatt_nr = ? AND datum = ? AND ident_nr_bestand = ?",
-                        artikel.getPositionsNummer() > 0
-                                ? new String[]{String.valueOf(blattNr), datum, String.valueOf(artikel.getPositionsNummer())}
-                                : new String[]{String.valueOf(blattNr), datum, artikel.getArtikelnummer()}
-                );
-            }
-            db.setTransactionSuccessful();
-        } finally {
-            db.endTransaction();
-        }
-    }
 
     private Zaehlerliste leseZaehlerliste(Cursor cursor) {
         return new Zaehlerliste(
@@ -1568,17 +1921,6 @@ public class LokalerInventurSpeicher extends SQLiteOpenHelper {
         }
     }
 
-    private String kombiniereBezeichnung(String bezeichnung1, String bezeichnung2, String identnummer) {
-        String ersterTeil = bezeichnung1 == null ? "" : bezeichnung1.trim();
-        String zweiterTeil = bezeichnung2 == null ? "" : bezeichnung2.trim();
-        String kombiniert = (ersterTeil + " " + zweiterTeil).trim();
-        if (!kombiniert.isEmpty()) {
-            return kombiniert;
-        }
-        return identnummer == null || identnummer.trim().isEmpty()
-                ? "Bezeichnung nicht verfuegbar"
-                : "Artikel " + identnummer.trim();
-    }
 
     private Integer leseGanzzahlOderNull(Cursor cursor, String spaltenname, Integer standardwert) {
         int spaltenIndex = cursor.getColumnIndexOrThrow(spaltenname);

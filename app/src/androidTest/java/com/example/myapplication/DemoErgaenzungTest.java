@@ -23,7 +23,7 @@ public class DemoErgaenzungTest {
     @Before
     public void vorbereiten() {
         // Eigene Test-App-Datenbank, niemals inventur_demo_offline.db verwenden.
-        context = InstrumentationRegistry.getInstrumentation().getContext();
+        context = InstrumentationRegistry.getInstrumentation().getTargetContext();
         name = "test-demo-" + UUID.randomUUID() + ".db";
         speicher = new LokalerInventurSpeicher(context, name);
         demo = new MockInventurRemoteDataSource();
@@ -43,7 +43,7 @@ public class DemoErgaenzungTest {
         speicher.close();
         speicher = new LokalerInventurSpeicher(context, name);
         pruefe25(new ArtikelRepository(new MockInventurRemoteDataSource(), speicher));
-        assertEquals(10, speicher.getReadableDatabase().getVersion());
+        assertEquals(13, speicher.getReadableDatabase().getVersion());
     }
 
     @Test

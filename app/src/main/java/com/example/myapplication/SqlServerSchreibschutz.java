@@ -13,9 +13,11 @@ import java.util.HashSet;
 import java.util.Locale;
 import java.util.Set;
 
-/** SQL-Lesen bleibt erlaubt; Schreibzugriffe sind im Firmentest gesperrt. */
+/** Alte Schreibwege bleiben gesperrt; internalSql erlaubt kontrollierte Einzelversuche. */
 public final class SqlServerSchreibschutz {
-    public static final String MELDUNG = "SQL-Testbetrieb: Keine Uebertragung. Aenderungen bleiben lokal gespeichert.";
+    public static final String MELDUNG = BuildConfig.SQL_EINZELVERSUCH_ERLAUBT
+            ? "Alte Listen-Schreibwege gesperrt. SQL-Mengenabgleich fuer eindeutig zugeordnete Positionen verfuegbar; unklare Versuche werden nicht wiederholt. Notizen, Kopf und Abschluss bleiben separat offen."
+            : "SQL-Testbetrieb: Keine Uebertragung. Aenderungen bleiben lokal gespeichert.";
     private static final Set<String> VERBOTENE_WOERTER = new HashSet<>(Arrays.asList(
             "INSERT", "UPDATE", "DELETE", "MERGE", "INTO", "CREATE", "ALTER", "DROP",
             "TRUNCATE", "EXEC", "EXECUTE", "GRANT", "DENY", "REVOKE", "DBCC", "BACKUP",
@@ -28,6 +30,17 @@ public final class SqlServerSchreibschutz {
     private SqlServerSchreibschutz() { }
 
     public static boolean istSchreibenErlaubt() { return false; }
+
+    public static boolean istKontrollierterEinzelversuchErlaubt() {
+        return BuildConfig.SQL_EINZELVERSUCH_ERLAUBT
+                && "internalSql".equals(BuildConfig.BUILD_TYPE)
+                && "DatenWHF".equals(BuildConfig.SQL_SERVER_DATABASE)
+                && "dbo".equals(BuildConfig.SQL_SERVER_SCHEMA);
+    }
+
+    public static void pruefeKontrolliertenEinzelversuch() throws SQLException {
+        if (!istKontrollierterEinzelversuchErlaubt()) throw gesperrt();
+    }
 
     public static void pruefeSchreiben() throws RemoteDatenException {
         throw new RemoteDatenException(MELDUNG);

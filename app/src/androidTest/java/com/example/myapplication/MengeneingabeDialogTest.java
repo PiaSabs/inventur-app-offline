@@ -17,10 +17,11 @@ import static org.junit.Assert.*;
 public class MengeneingabeDialogTest {
     @Test
     public void entwurfBleibtOffenUndSpeichertErstNachBestaetigung() {
-        // LoginActivity meldet im Demo-Modus ab. Bestehende Sitzung danach wiederherstellen.
+        // Ohne Anmeldung bleibt der Test im Login und oeffnet keine echten Listen.
         Benutzersitzung sitzung = new Benutzersitzung(
                 InstrumentationRegistry.getInstrumentation().getTargetContext());
         String vorherigerZaehler = sitzung.holeAngemeldetenZaehler();
+        sitzung.abmelden();
         try (ActivityScenario<LoginActivity> scenario = ActivityScenario.launch(LoginActivity.class)) {
             MengeneingabeDialog dialog = new MengeneingabeDialog();
             Artikel artikel = new Artikel("TEST", "Test", 1, 0, null);
@@ -30,8 +31,8 @@ public class MengeneingabeDialogTest {
                     dialog.zeige(a, artikel, () -> fail("Doppelter Dialog"));
                 });
                 Integer vorher = artikel.getZaehlMenge();
-                onView(isAssignableFrom(EditText.class)).inRoot(isDialog()).perform(replaceText(wert));
-                onView(isAssignableFrom(EditText.class)).inRoot(isDialog()).check(matches(isDisplayed()));
+                onView(isAssignableFrom(EditText.class)).inRoot(isDialog()).perform(replaceText(wert), closeSoftKeyboard());
+                onView(isAssignableFrom(EditText.class)).inRoot(isDialog()).check(matches(withText(wert)));
                 assertEquals(vorher, artikel.getZaehlMenge());
                 onView(withText(R.string.anmerkung_dialog_speichern)).inRoot(isDialog()).perform(click());
                 assertEquals(wert.isEmpty() ? null : Integer.valueOf(wert), artikel.getZaehlMenge());

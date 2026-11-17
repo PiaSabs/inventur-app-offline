@@ -5,7 +5,6 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.text.Editable;
-import android.text.InputType;
 import android.text.TextWatcher;
 import android.view.Menu;
 import android.view.View;
@@ -27,32 +26,27 @@ import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
 import java.util.ArrayList;
-import java.text.SimpleDateFormat;
-import java.util.Date;
 import java.util.List;
-import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-// Diese Activity kapselt die komplette Artikelansicht.
-// Dadurch bleibt das Hauptmenue schlank und die Artikellogik kann separat erweitert werden.
+// Gemeinsames Laden, Speichern und Navigieren fuer beide Artikelansichten.
 public class ArtikeluebersichtActivity extends AppCompatActivity {
 
     public static final String EXTRA_ZAEHLERLISTEN_ID = "zaehlerlisten_id";
     public static final String EXTRA_ZAEHLERLISTEN_BEZEICHNUNG = "zaehlerlisten_bezeichnung";
     public static final String EXTRA_ABGESCHLOSSENE_BEARBEITUNG_ERLAUBT = "abgeschlossene_bearbeitung_erlaubt";
 
-    private static final int FILTER_ALLE = 1;
-    private static final int FILTER_OFFEN = 2;
-    private static final int FILTER_GEZAEHLT = 3;
-    private static final int FILTER_UNTER_MINDESTBESTAND = 4;
+    protected static final int FILTER_ALLE = 1;
+    protected static final int FILTER_OFFEN = 2;
+    protected static final int FILTER_GEZAEHLT = 3;
+    protected static final int FILTER_UNTER_MINDESTBESTAND = 4;
     private static final long AUTO_SAVE_DELAY_MS = 1200L;
-    private static final SimpleDateFormat STICHTAG_FORMAT = new SimpleDateFormat("dd.MM.yyyy", Locale.GERMANY);
 
     private final MengeneingabeDialog mengeneingabeDialog = new MengeneingabeDialog();
     private ArtikelRepository artikelRepository;
     private List<Artikel> artikelListe = new ArrayList<>();
-    private ArtikelAdapter artikelAdapter;
+    protected RecyclerView.Adapter<?> artikelAdapter;
     private RecyclerView artikelRecyclerView;
     private int zaehlerlistenId;
     private Benutzersitzung benutzersitzung;
@@ -60,18 +54,27 @@ public class ArtikeluebersichtActivity extends AppCompatActivity {
     private List<Zaehlerliste> verfuegbareZaehlerlisten = new ArrayList<>();
     private String ausgewaehlteZaehlerlistenBezeichnung = "";
     private String letzterGespeicherterStand = "";
+    private String zaehlerAnzeigeStand = "";
+    private String schreiberAnzeigeStand = "";
     private final Object lokaleSpeicherSperre = new Object();
     private volatile long speicherGeneration;
     private Runnable nachLokalemSpeichern;
     private boolean ignoriertAenderungenBeimInitialisieren = true;
     private int gesamtPositionenFuerBlatt;
+    private long ladeGeneration;
     private TextWatcher schreiberTextWatcher;
     private final ExecutorService executorService = Executors.newSingleThreadExecutor();
     private final Handler autoSaveHandler = new Handler(Looper.getMainLooper());
-    private final Runnable autoSaveRunnable = () -> speichereZaehlmengenLokal(true, null);
+    private final Runnable autoSaveRunnable = () -> speichereZaehlmengenLokal(null);
     private boolean autoSaveGeplant;
     private boolean autoSaveLaeuft;
     private boolean bearbeitungAbgeschlosseneListeErlaubt;
+    private boolean austrittLaeuft;
+    private AlertDialog abschlussDialog;
+    private AlertDialog austrittsFortschritt;
+    private AlertDialog austrittsRueckmeldung;
+    private AlertDialog austrittsDetails;
+    private Runnable austrittWiederholen;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -83,7 +86,7 @@ public class ArtikeluebersichtActivity extends AppCompatActivity {
         }
 
         EdgeToEdge.enable(this);
-        setContentView(R.layout.activity_artikeluebersicht);
+        setContentView(artikelLayout());
         ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.artikeluebersichtRoot), (v, insets) -> {
             Insets systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
             Insets imeInsets = insets.getInsets(WindowInsetsCompat.Type.ime());
@@ -101,7 +104,6 @@ public class ArtikeluebersichtActivity extends AppCompatActivity {
         artikelRecyclerView.setLayoutManager(new LinearLayoutManager(this));
 
         // Die Activity laedt die Daten bewusst ueber das Repository.
-        // PR: Hier bleibt die Anzeige absichtlich von der spaeteren API-/SQL-Anbindung entkoppelt.
         artikelRepository = AppContainer.erstelleArtikelRepository(this);
         artikelRepository.setzeAutomatischeSynchronisierungPausiert(true);
         registriereFesteListener();
@@ -110,14 +112,6 @@ public class ArtikeluebersichtActivity extends AppCompatActivity {
 
 
 
-    private void aktualisiereAnsichtManuell() {
-        Toast.makeText(this, R.string.aktualisieren_startet, Toast.LENGTH_SHORT).show();
-        if (hatUngespeicherteAenderungen() || autoSaveLaeuft || autoSaveGeplant) {
-            speichereZaehlmengenLokal(false, () -> ladeAnsichtsdaten((RecyclerView) findViewById(R.id.artikelRecyclerView)));
-            return;
-        }
-        ladeAnsichtsdaten((RecyclerView) findViewById(R.id.artikelRecyclerView));
-    }
 
     private void registriereSuchfeld() {
         EditText artikelSucheEditText = findViewById(R.id.artikelSucheEditText);
@@ -133,37 +127,22 @@ public class ArtikeluebersichtActivity extends AppCompatActivity {
             @Override
             public void afterTextChanged(Editable s) {
                 if (artikelAdapter != null) {
-                    artikelAdapter.setSuchbegriff(s == null ? "" : s.toString());
+                    setzeSuchbegriff(s == null ? "" : s.toString());
                     aktualisiereLeereAnsicht();
                 }
             }
         });
     }
 
-    private void speichereZaehlmengenLokal() {
-        speichereZaehlmengenLokal(false, null);
-    }
-
     private void speichereZaehlmengenLokal(Runnable onErfolg) {
-        speichereZaehlmengenLokal(false, onErfolg);
-    }
-
-    private void speichereZaehlmengenLokal(boolean istAutomatisch, Runnable onErfolg) {
-        fuehreSpeicherVorgangAus(istAutomatisch, false, onErfolg);
-    }
-
-    private void synchronisiereZaehlmengenBeimVerlassen(Runnable onErfolg) {
-        fuehreSpeicherVorgangAus(false, true, onErfolg);
-    }
-
-    private void fuehreSpeicherVorgangAus(boolean istAutomatisch, boolean mitSynchronisierung, Runnable onErfolg) {
         if (ignoriertAenderungenBeimInitialisieren || isDestroyed()) return;
-        if (onErfolg != null && nachLokalemSpeichern == null) nachLokalemSpeichern = onErfolg;
+        if (onErfolg != null && (nachLokalemSpeichern == null || austrittLaeuft)) nachLokalemSpeichern = onErfolg;
         if (autoSaveLaeuft) return;
-        EditText zaehlerEditText = findViewById(R.id.zaehlerEditText);
-        EditText schreiberEditText = findViewById(R.id.schreiberEditText);
-        String zaehlerName = zaehlerEditText.getText() == null ? "" : zaehlerEditText.getText().toString().trim();
-        String schreiberName = schreiberEditText.getText() == null ? "" : schreiberEditText.getText().toString().trim();
+        String zaehlerAnzeige = holeAktuellenZaehlerFilter();
+        String schreiberAnzeige = holeAktuellenSchreiberFilter();
+        // Unbearbeitete Anzeigevorgaben sind keine synchronisierungspflichtige Kopfänderung.
+        String zaehlerName = zaehlerAnzeige.equals(zaehlerAnzeigeStand) ? null : zaehlerAnzeige;
+        String schreiberName = schreiberAnzeige.equals(schreiberAnzeigeStand) ? null : schreiberAnzeige;
         final int blattId = zaehlerlistenId;
         List<Artikel> artikelSnapshot = erstelleArtikelSnapshot();
         String fingerprint = erstelleAktuellenStandFingerprint();
@@ -177,9 +156,8 @@ public class ArtikeluebersichtActivity extends AppCompatActivity {
             try {
                 synchronized (lokaleSpeicherSperre) {
                     if (generation != speicherGeneration) return;
-                    antwort = mitSynchronisierung && !artikelRepository.istSqlSchreibenGesperrt()
-                            ? artikelRepository.speichereZaehlmengenMitSynchronisierung(blattId, zaehlerName, schreiberName, artikelSnapshot)
-                            : artikelRepository.speichereZaehlmengenNurLokal(blattId, zaehlerName, schreiberName, artikelSnapshot);
+                    antwort = artikelRepository.speichereZaehlmengenNurLokal(
+                            blattId, zaehlerName, schreiberName, artikelSnapshot);
                 }
             } catch (RuntimeException exception) {
                 antwort = new ZaehlmengenSpeicherAntwort(false, getString(R.string.lokales_speichern_fehler), null);
@@ -190,11 +168,14 @@ public class ArtikeluebersichtActivity extends AppCompatActivity {
                 autoSaveLaeuft = false;
                 if (!ergebnis.istErfolgreich()) {
                     nachLokalemSpeichern = null;
-                    Toast.makeText(this, R.string.lokales_speichern_fehler, Toast.LENGTH_LONG).show();
+                    if (austrittLaeuft) zeigeAustrittsFehler(getString(R.string.lokales_speichern_fehler));
+                    else Toast.makeText(this, R.string.lokales_speichern_fehler, Toast.LENGTH_LONG).show();
                 } else {
+                    zaehlerAnzeigeStand = zaehlerAnzeige;
+                    schreiberAnzeigeStand = schreiberAnzeige;
                     letzterGespeicherterStand = fingerprint;
                     if (hatUngespeicherteAenderungen()) {
-                        fuehreSpeicherVorgangAus(istAutomatisch, mitSynchronisierung, null);
+                        speichereZaehlmengenLokal(null);
                         return;
                     }
                     Runnable fortsetzen = nachLokalemSpeichern;
@@ -209,13 +190,18 @@ public class ArtikeluebersichtActivity extends AppCompatActivity {
 
     @Override
     protected void onPause() {
+        // Ein bewusster Austritt laeuft weiter; Pause allein startet keine Uebertragung.
+        if (austrittLaeuft) {
+            super.onPause();
+            return;
+        }
         autoSaveHandler.removeCallbacks(autoSaveRunnable);
         autoSaveGeplant = false;
         nachLokalemSpeichern = null;
         if (artikelRepository != null && !ignoriertAenderungenBeimInitialisieren
                 && !istBearbeitungGesperrt() && (hatUngespeicherteAenderungen() || autoSaveLaeuft)) {
-            EditText zaehler = findViewById(R.id.zaehlerEditText);
-            EditText schreiber = findViewById(R.id.schreiberEditText);
+            String zaehlerAnzeige = holeAktuellenZaehlerFilter();
+            String schreiberAnzeige = holeAktuellenSchreiberFilter();
             List<Artikel> snapshot = erstelleArtikelSnapshot();
             String fingerprint = erstelleAktuellenStandFingerprint();
             ++speicherGeneration;
@@ -223,9 +209,12 @@ public class ArtikeluebersichtActivity extends AppCompatActivity {
                 // Vor dem Lebenszykluswechsel nur lokal sichern; aeltere Auftraege nicht nachschreiben lassen.
                 synchronized (lokaleSpeicherSperre) {
                     ZaehlmengenSpeicherAntwort antwort = artikelRepository.speichereZaehlmengenNurLokal(
-                            zaehlerlistenId, zaehler.getText().toString().trim(), schreiber.getText().toString().trim(), snapshot);
+                            zaehlerlistenId, zaehlerAnzeige.equals(zaehlerAnzeigeStand) ? null : zaehlerAnzeige,
+                            schreiberAnzeige.equals(schreiberAnzeigeStand) ? null : schreiberAnzeige, snapshot);
                     if (!antwort.istErfolgreich()) throw new IllegalStateException("Lokale Speicherung nicht bestaetigt");
                 }
+                zaehlerAnzeigeStand = zaehlerAnzeige;
+                schreiberAnzeigeStand = schreiberAnzeige;
                 letzterGespeicherterStand = fingerprint;
             } catch (RuntimeException exception) {
                 Toast.makeText(this, R.string.lokales_speichern_fehler, Toast.LENGTH_LONG).show();
@@ -236,15 +225,6 @@ public class ArtikeluebersichtActivity extends AppCompatActivity {
         super.onPause();
     }
 
-    private void zeigeSynchronisierungsfehlerDialog(String meldung) {
-        new AlertDialog.Builder(this)
-                .setTitle("Synchronisierung fehlgeschlagen")
-                .setMessage(meldung == null || meldung.trim().isEmpty()
-                        ? "Die SQL-Synchronisierung konnte nicht abgeschlossen werden."
-                        : meldung)
-                .setPositiveButton(android.R.string.ok, (dialog, which) -> dialog.dismiss())
-                .show();
-    }
 
     private void setzeZaehlerlistenInformationen(Zaehlerliste zaehlerliste) {
         if (zaehlerliste == null) {
@@ -285,14 +265,14 @@ public class ArtikeluebersichtActivity extends AppCompatActivity {
         }
     }
 
-    private void verarbeiteArtikelAenderung() {
+    protected void verarbeiteArtikelAenderung() {
         aktualisiereFortschritt();
         if (!ignoriertAenderungenBeimInitialisieren) {
             planeAutomatischesSpeichern();
         }
     }
 
-    private void aktualisiereLeereAnsicht() {
+    protected void aktualisiereLeereAnsicht() {
         TextView leerstandTextView = findViewById(R.id.leerstandTextView);
         RecyclerView artikelRecyclerView = findViewById(R.id.artikelRecyclerView);
         boolean istLeer = artikelAdapter.getItemCount() == 0;
@@ -366,58 +346,21 @@ public class ArtikeluebersichtActivity extends AppCompatActivity {
         String gespeicherterSchreiberName = aktuelleZaehlerliste == null
                 ? ""
                 : aktuelleZaehlerliste.getGespeicherterSchreiberName();
-        if (gespeicherterSchreiberName != null && !gespeicherterSchreiberName.trim().isEmpty()) {
-            schreiberEditText.setText(gespeicherterSchreiberName);
-        } else if (schreiberEditText.getText() == null || schreiberEditText.getText().toString().trim().isEmpty()) {
-            schreiberEditText.setText("Peter");
-        }
+        schreiberEditText.setText(gespeicherterSchreiberName != null && !gespeicherterSchreiberName.trim().isEmpty()
+                ? gespeicherterSchreiberName : "Peter");
+        schreiberEditText.setEnabled(false);
+        schreiberEditText.setFocusable(false);
+        schreiberEditText.setClickable(false);
     }
 
     private void registriereVertretungsButtons() {
         ImageButton zaehlerVertretungButton = findViewById(R.id.zaehlerVertretungButton);
         ImageButton schreiberVertretungButton = findViewById(R.id.schreiberVertretungButton);
 
-        zaehlerVertretungButton.setOnClickListener(v -> oeffneVertretungsDialog(
-                R.string.zaehler_vertretung_titel,
-                R.string.zaehler_vertretung_hinweis,
-                R.string.zaehler_vertretung_hint,
-                R.id.zaehlerEditText
-        ));
-
-        schreiberVertretungButton.setOnClickListener(v -> oeffneVertretungsDialog(
-                R.string.schreiber_vertretung_titel,
-                R.string.schreiber_vertretung_hinweis,
-                R.string.schreiber_vertretung_hint,
-                R.id.schreiberEditText
-        ));
-    }
-
-    private void oeffneVertretungsDialog(int titelResId, int nachrichtResId, int hintResId, int editTextId) {
-        EditText zielFeld = findViewById(editTextId);
-        EditText dialogEditText = new EditText(this);
-        dialogEditText.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PERSON_NAME);
-        dialogEditText.setHint(hintResId);
-        dialogEditText.setSingleLine(true);
-        CharSequence aktuellerWert = zielFeld.getText();
-        if (aktuellerWert != null) {
-            dialogEditText.setText(aktuellerWert.toString().trim());
-            dialogEditText.setSelection(dialogEditText.getText().length());
-        }
-
-        new AlertDialog.Builder(this)
-                .setTitle(titelResId)
-                .setMessage(nachrichtResId)
-                .setView(dialogEditText)
-                .setPositiveButton(R.string.vertretung_dialog_uebernehmen, (dialog, which) -> {
-                    String vertretung = dialogEditText.getText() == null
-                            ? ""
-                            : dialogEditText.getText().toString().trim();
-                    if (!vertretung.isEmpty()) {
-                        zielFeld.setText(vertretung);
-                    }
-                })
-                .setNegativeButton(R.string.vertretung_dialog_abbrechen, (dialog, which) -> dialog.dismiss())
-                .show();
+        zaehlerVertretungButton.setEnabled(false);
+        schreiberVertretungButton.setEnabled(false);
+        zaehlerVertretungButton.setOnClickListener(null);
+        schreiberVertretungButton.setOnClickListener(null);
     }
 
     private void starteLogin() {
@@ -428,7 +371,11 @@ public class ArtikeluebersichtActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
-        mengeneingabeDialog.schliesse();
+        schliesseMengeneingabe();
+        if (abschlussDialog != null) abschlussDialog.dismiss();
+        if (austrittsFortschritt != null) austrittsFortschritt.dismiss();
+        if (austrittsRueckmeldung != null) austrittsRueckmeldung.dismiss();
+        if (austrittsDetails != null) austrittsDetails.dismiss();
         super.onDestroy();
         autoSaveHandler.removeCallbacks(autoSaveRunnable);
         if (artikelRepository != null) {
@@ -464,67 +411,31 @@ public class ArtikeluebersichtActivity extends AppCompatActivity {
     }
 
     private void pruefeUngespeicherteAenderungenVorDemVerlassen() {
-        if (!hatUngespeicherteAenderungen()
-                && !autoSaveLaeuft
-                && !autoSaveGeplant) {
-            verlasseArtikeluebersichtMitAutomatischemAbschluss();
-            return;
-        }
-        speichereZaehlmengenLokal(false, this::verlasseArtikeluebersichtMitAutomatischemAbschluss);
-    }
-
-    private void verlasseArtikeluebersichtMitAutomatischemAbschluss() {
-        if (istBearbeitungGesperrt()) {
-            finish();
-            return;
-        }
-
-        if (sindAllePositionenGueltigGezahlt()) {
-            markiereZaehlerlisteAutomatischAlsAbgeschlossenUndVerlasse();
+        if (austrittLaeuft || abschlussDialog != null || ignoriertAenderungenBeimInitialisieren) return;
+        if (aktuelleZaehlerliste != null && aktuelleZaehlerliste.istAbgeschlossen()) {
+            synchronisiereUndVerlasse(false, this::finish);
             return;
         }
         frageNachAbschlussUndVerlasseGegebenenfalls();
     }
 
-    private boolean sindAllePositionenGueltigGezahlt() {
-        if (artikelListe == null || artikelListe.isEmpty()) {
-            return false;
-        }
-
-        for (Artikel artikel : artikelListe) {
-            if (!hatGueltigeZaehlmenge(artikel)) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private boolean hatGueltigeZaehlmenge(Artikel artikel) {
-        return artikel != null
-                && artikel.getZaehlMenge() != null
-                && artikel.getZaehlMenge() >= 0;
-    }
-
     private void frageNachAbschlussUndVerlasseGegebenenfalls() {
-        if (istBearbeitungGesperrt()) {
-            finish();
-            return;
-        }
-
-        new AlertDialog.Builder(this)
+        abschlussDialog = new AlertDialog.Builder(this)
                 .setTitle(R.string.abschluss_dialog_titel)
                 .setMessage(erstelleAbschlussDialogText())
-                .setPositiveButton(R.string.abschluss_dialog_ja, (dialog, which) -> markiereZaehlerlisteAlsAbgeschlossenUndVerlasse())
-                .setNegativeButton(R.string.abschluss_dialog_nein, (dialog, which) -> finish())
+                .setPositiveButton(R.string.abschluss_dialog_ja, (dialog, which) -> synchronisiereUndVerlasse(true, this::finish))
+                .setNegativeButton(R.string.abschluss_dialog_nein, (dialog, which) -> synchronisiereUndVerlasse(false, this::finish))
                 .setNeutralButton(R.string.abschluss_dialog_abbrechen, (dialog, which) -> dialog.dismiss())
-                .show();
+                .create();
+        abschlussDialog.setOnDismissListener(dialog -> abschlussDialog = null);
+        abschlussDialog.show();
     }
 
     private String erstelleAbschlussDialogText() {
         int offeneArtikel = zaehleOffeneArtikel();
         boolean hatOffeneSynchronisierung = AppContainer.istApiModusAktiv()
                 && artikelRepository != null
-                && artikelRepository.hatOffeneSynchronisierung();
+                && artikelRepository.hatOffeneMengensynchronisierung(zaehlerlistenId);
 
         if (offeneArtikel > 0 && hatOffeneSynchronisierung) {
             return getString(R.string.abschluss_offene_und_sync_text, offeneArtikel);
@@ -548,7 +459,7 @@ public class ArtikeluebersichtActivity extends AppCompatActivity {
         return offeneArtikel;
     }
 
-    private boolean istBearbeitungGesperrt() {
+    protected boolean istBearbeitungGesperrt() {
         return aktuelleZaehlerliste != null
                 && aktuelleZaehlerliste.istAbgeschlossen()
                 && !bearbeitungAbgeschlosseneListeErlaubt;
@@ -612,25 +523,25 @@ public class ArtikeluebersichtActivity extends AppCompatActivity {
         popupMenu.setOnMenuItemClickListener(item -> {
             int itemId = item.getItemId();
             if (itemId == FILTER_ALLE) {
-                artikelAdapter.zeigeAlleArtikel();
+                setzeFilter(FILTER_ALLE);
                 aktualisiereLeereAnsicht();
                 Toast.makeText(this, R.string.filter_alle_aktiv, Toast.LENGTH_SHORT).show();
                 return true;
             }
             if (itemId == FILTER_OFFEN) {
-                artikelAdapter.zeigeNurUngezaehlteArtikel();
+                setzeFilter(FILTER_OFFEN);
                 aktualisiereLeereAnsicht();
                 Toast.makeText(this, R.string.filter_ungezaehlt_aktiv, Toast.LENGTH_SHORT).show();
                 return true;
             }
             if (itemId == FILTER_GEZAEHLT) {
-                artikelAdapter.zeigeNurGezaehlteArtikel();
+                setzeFilter(FILTER_GEZAEHLT);
                 aktualisiereLeereAnsicht();
                 Toast.makeText(this, R.string.filter_gezaehlt_aktiv, Toast.LENGTH_SHORT).show();
                 return true;
             }
             if (itemId == FILTER_UNTER_MINDESTBESTAND) {
-                artikelAdapter.zeigeNurUnterMindestbestandArtikel();
+                setzeFilter(FILTER_UNTER_MINDESTBESTAND);
                 aktualisiereLeereAnsicht();
                 Toast.makeText(this, R.string.filter_unter_mindestbestand_aktiv, Toast.LENGTH_SHORT).show();
                 return true;
@@ -643,6 +554,7 @@ public class ArtikeluebersichtActivity extends AppCompatActivity {
     private void ladeAnsichtsdaten(RecyclerView artikelRecyclerView) {
         ignoriertAenderungenBeimInitialisieren = true;
         final int ladeBlattId = zaehlerlistenId;
+        final long generation = ++ladeGeneration;
 
         executorService.execute(() -> {
             List<Artikel> geladeneArtikel = new ArrayList<>();
@@ -651,6 +563,7 @@ public class ArtikeluebersichtActivity extends AppCompatActivity {
             String fehlermeldung = null;
 
             try {
+                artikelRepository.ladeSqlBlattFallsFehlt(ladeBlattId);
                 geladeneZaehlerlisten = artikelRepository.ladeZaehlerlisten();
                 artikelRepository.angleicheBeispielWochenlistenZuordnungFuerTest(
                         benutzersitzung.holeAngemeldetenZaehler(),
@@ -659,7 +572,7 @@ public class ArtikeluebersichtActivity extends AppCompatActivity {
                 geladeneZaehlerlisten = artikelRepository.ladeZaehlerlisten();
                 geladeneArtikel = artikelRepository.ladeArtikel(ladeBlattId);
                 geladeneZaehlerliste = artikelRepository.ladeZaehlerlisteFuerId(ladeBlattId);
-            } catch (RuntimeException exception) {
+            } catch (RemoteDatenException | RuntimeException exception) {
                 fehlermeldung = "Artikeldaten konnten nicht geladen werden.";
             }
 
@@ -668,7 +581,8 @@ public class ArtikeluebersichtActivity extends AppCompatActivity {
             List<Zaehlerliste> finaleGeladeneZaehlerlisten = geladeneZaehlerlisten;
             String finaleFehlermeldung = fehlermeldung;
             runOnUiThread(() -> {
-                if (isDestroyed() || ladeBlattId != zaehlerlistenId) return;
+                if (isDestroyed() || isFinishing() || ladeBlattId != zaehlerlistenId
+                        || generation != ladeGeneration) return;
                 ignoriertAenderungenBeimInitialisieren = true;
                 artikelListe = finaleGeladeneArtikel;
                 gesamtPositionenFuerBlatt = finaleGeladeneArtikel.size();
@@ -682,14 +596,13 @@ public class ArtikeluebersichtActivity extends AppCompatActivity {
         });
     }
 
-    private void initialisiereAnsicht(RecyclerView artikelRecyclerView) {
-        if (aktuelleZaehlerliste != null && normalisiereText(ausgewaehlteZaehlerlistenBezeichnung).isEmpty()) {
-            ausgewaehlteZaehlerlistenBezeichnung = aktuelleZaehlerliste.getBezeichnung();
-        }
-        setzeZaehlerlistenInformationen(aktuelleZaehlerliste);
+    protected int artikelLayout() {
+        return R.layout.activity_artikeluebersicht;
+    }
 
+    protected RecyclerView.Adapter<?> erstelleArtikelAdapter(List<Artikel> artikel) {
         boolean bearbeitungErlaubt = !istBearbeitungGesperrt();
-        artikelAdapter = new ArtikelAdapter(artikelListe, bearbeitungErlaubt, new ArtikelAdapter.OnArtikelInteraktionListener() {
+        return new ArtikelAdapter(artikel, bearbeitungErlaubt, new ArtikelAdapter.OnArtikelInteraktionListener() {
             @Override
             public void onArtikelStatusChanged() {
                 verarbeiteArtikelAenderung();
@@ -703,16 +616,45 @@ public class ArtikeluebersichtActivity extends AppCompatActivity {
                 });
             }
         });
+    }
+
+    protected void setzeSuchbegriff(String suchbegriff) {
+        ((ArtikelAdapter) artikelAdapter).setSuchbegriff(suchbegriff);
+    }
+
+    protected void setzeFilter(int modus) {
+        ArtikelAdapter adapter = (ArtikelAdapter) artikelAdapter;
+        switch (modus) {
+            case FILTER_OFFEN: adapter.zeigeNurUngezaehlteArtikel(); break;
+            case FILTER_GEZAEHLT: adapter.zeigeNurGezaehlteArtikel(); break;
+            case FILTER_UNTER_MINDESTBESTAND: adapter.zeigeNurUnterMindestbestandArtikel(); break;
+            default: adapter.zeigeAlleArtikel();
+        }
+    }
+
+    protected void schliesseMengeneingabe() {
+        mengeneingabeDialog.schliesse();
+    }
+
+    private void initialisiereAnsicht(RecyclerView artikelRecyclerView) {
+        if (aktuelleZaehlerliste != null && normalisiereText(ausgewaehlteZaehlerlistenBezeichnung).isEmpty()) {
+            ausgewaehlteZaehlerlistenBezeichnung = aktuelleZaehlerliste.getBezeichnung();
+        }
+        setzeZaehlerlistenInformationen(aktuelleZaehlerliste);
+
+        artikelAdapter = erstelleArtikelAdapter(artikelListe);
         artikelRecyclerView.setAdapter(artikelAdapter);
         EditText artikelSucheEditText = findViewById(R.id.artikelSucheEditText);
         if (artikelSucheEditText.getText() != null && artikelSucheEditText.getText().length() > 0) {
-            artikelAdapter.setSuchbegriff(artikelSucheEditText.getText().toString());
+            setzeSuchbegriff(artikelSucheEditText.getText().toString());
         }
         aktualisiereFortschritt();
         aktualisiereLeereAnsicht();
         setzeTestmodusHinweis();
         setzeAngemeldetenZaehler();
         setzeStandardSchreiber();
+        zaehlerAnzeigeStand = holeAktuellenZaehlerFilter();
+        schreiberAnzeigeStand = holeAktuellenSchreiberFilter();
         aktualisiereBlattNavigation();
         letzterGespeicherterStand = erstelleAktuellenStandFingerprint();
         autoSaveGeplant = false;
@@ -721,32 +663,93 @@ public class ArtikeluebersichtActivity extends AppCompatActivity {
         aktualisiereAutoSaveStatus();
     }
 
-    private void markiereZaehlerlisteAlsAbgeschlossenUndVerlasse() {
-        final int abschlussBlattId = zaehlerlistenId;
-        executorService.execute(() -> {
-            try {
-                if (!artikelRepository.markiereZaehlerlisteAlsAbgeschlossen(abschlussBlattId)) {
-                    throw new IllegalStateException("Lokaler Abschluss konnte nicht gespeichert werden");
+    private void synchronisiereUndVerlasse(boolean abschliessen, Runnable navigation) {
+        if (austrittLaeuft || ignoriertAenderungenBeimInitialisieren) return;
+        austrittLaeuft = true;
+        int blatt = zaehlerlistenId;
+        austrittWiederholen = () -> synchronisiereUndVerlasse(abschliessen, navigation);
+        austrittsFortschritt = new AlertDialog.Builder(this)
+                .setTitle(R.string.austritt_sync_titel)
+                .setMessage(R.string.austritt_sync_speichern)
+                .setView(new android.widget.ProgressBar(this))
+                .setCancelable(false).create();
+        austrittsFortschritt.show();
+        Runnable uebertragen = () -> {
+            austrittsFortschritt.setMessage(getString(R.string.austritt_sync_uebertragen));
+            executorService.execute(() -> {
+                ZaehlmengenSpeicherAntwort antwort = artikelRepository.synchronisiereBeimVerlassen(blatt, abschliessen);
+                Zaehlerliste gespeichert = null;
+                if (abschliessen) {
+                    try {
+                        gespeichert = artikelRepository.ladeZaehlerlisteFuerId(blatt);
+                    } catch (RuntimeException exception) {
+                        antwort = new ZaehlmengenSpeicherAntwort(false,
+                                "Lokaler Abschlussstand konnte nicht gelesen werden. Änderungen bleiben erhalten.", null);
+                    }
                 }
+                Zaehlerliste kopf = gespeichert;
+                ZaehlmengenSpeicherAntwort ergebnis = antwort;
                 runOnUiThread(() -> {
-                    if (isDestroyed() || zaehlerlistenId != abschlussBlattId) return;
-                    Toast.makeText(this, artikelRepository.istSqlSchreibenGesperrt()
-                            ? R.string.abschluss_nur_lokal : R.string.abschluss_erfolgreich, Toast.LENGTH_SHORT).show();
-                    setResult(RESULT_OK);
-                    finish();
+                    if (isDestroyed() || isFinishing() || zaehlerlistenId != blatt) return;
+                    if (kopf != null) {
+                        aktuelleZaehlerliste = kopf;
+                        // Ein nur lokal gespeicherter Abschluss sperrt die Mengenbearbeitung ebenfalls.
+                        if (istBearbeitungGesperrt()) {
+                            artikelAdapter = erstelleArtikelAdapter(artikelListe);
+                            artikelRecyclerView.setAdapter(artikelAdapter);
+                            aktualisiereSpeicherhinweis();
+                        }
+                    }
+                    if (hatUngespeicherteAenderungen()) {
+                        zeigeAustrittsRueckmeldung(ergebnis.mitOffenenEingaben(),navigation);
+                    } else zeigeAustrittsRueckmeldung(ergebnis,navigation);
                 });
-            } catch (RuntimeException exception) {
-                runOnUiThread(() -> Toast.makeText(
-                        this,
-                        R.string.abschluss_fehler,
-                        Toast.LENGTH_SHORT
-                ).show());
-            }
-        });
+            });
+        };
+        if (istBearbeitungGesperrt()) uebertragen.run();
+        else speichereZaehlmengenLokal(uebertragen);
     }
 
-    private void markiereZaehlerlisteAutomatischAlsAbgeschlossenUndVerlasse() {
-        markiereZaehlerlisteAlsAbgeschlossenUndVerlasse();
+    private void zeigeAustrittsFehler(String meldung) {
+        ZaehlmengenSpeicherAntwort antwort=new ZaehlmengenSpeicherAntwort(false,meldung,null);
+        antwort.mitMengenbericht(0,0,0,0,java.util.Collections.emptyMap(),hatUngespeicherteAenderungen());
+        zeigeAustrittsRueckmeldung(antwort,null);
+    }
+
+    private void zeigeAustrittsRueckmeldung(ZaehlmengenSpeicherAntwort antwort, Runnable navigation) {
+        if (austrittsFortschritt != null) austrittsFortschritt.dismiss();
+        boolean erfolg=antwort.istErfolgreich();
+        if(!erfolg) austrittLaeuft=false;
+        AlertDialog.Builder dialog=new AlertDialog.Builder(this).setTitle(antwort.getTitel())
+                .setMessage(antwort.getBenutzerMeldung()).setCancelable(false);
+        if(erfolg) {
+            dialog.setPositiveButton(android.R.string.ok,(fenster,which) -> {
+                austrittLaeuft=false;
+                if(hatUngespeicherteAenderungen() || artikelRepository.hatOffeneMengensynchronisierung(zaehlerlistenId)) {
+                    zeigeAustrittsRueckmeldung(antwort.mitOffenenEingaben(),navigation);
+                    return;
+                }
+                setResult(RESULT_OK);
+                navigation.run();
+            });
+        } else {
+            dialog.setNegativeButton(R.string.austritt_sync_bleiben,null)
+                    .setNeutralButton("!",(fenster,which) -> {
+                        austrittsDetails=new AlertDialog.Builder(this).setTitle("Informationen f\u00fcr die IT")
+                                .setMessage(antwort.getMeldung()).setPositiveButton(android.R.string.ok,
+                                        (details,w) -> zeigeAustrittsRueckmeldung(antwort,navigation)).setCancelable(false).show();
+                    });
+            if(antwort.istWiederholbar()) dialog.setPositiveButton(R.string.austritt_sync_wiederholen,
+                    (fenster,which) -> austrittWiederholen.run());
+        }
+        austrittsRueckmeldung=dialog.create();
+        austrittsRueckmeldung.show();
+        if(!erfolg) {
+            android.widget.Button info=austrittsRueckmeldung.getButton(AlertDialog.BUTTON_NEUTRAL);
+            info.setTextColor(android.graphics.Color.rgb(190,35,30));
+            info.setTextSize(24);
+            info.setContentDescription("Technische Fehlerinformationen f\u00fcr die IT anzeigen");
+        }
     }
 
     private void registriereFesteListener() {
@@ -776,6 +779,7 @@ public class ArtikeluebersichtActivity extends AppCompatActivity {
     }
 
     private void pruefeUngespeicherteAenderungenVorDemBlattwechsel(int richtung) {
+        if (austrittLaeuft || abschlussDialog != null || ignoriertAenderungenBeimInitialisieren) return;
         if (!kannZuBlattWechseln(richtung)) {
             Toast.makeText(
                     this,
@@ -785,11 +789,7 @@ public class ArtikeluebersichtActivity extends AppCompatActivity {
             return;
         }
 
-        if (!hatUngespeicherteAenderungen() && !autoSaveLaeuft && !autoSaveGeplant) {
-            wechsleZuBenachbartemBlatt(richtung);
-            return;
-        }
-        speichereZaehlmengenLokal(false, () -> wechsleZuBenachbartemBlatt(richtung));
+        synchronisiereUndVerlasse(false, () -> wechsleZuBenachbartemBlatt(richtung));
     }
 
     private void wechsleZuBenachbartemBlatt(int richtung) {

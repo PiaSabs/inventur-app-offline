@@ -152,6 +152,10 @@ public class ZaehlerlistenActivity extends AppCompatActivity {
 
     private void starteArtikeluebersicht(Zaehlerliste zaehlerliste) {
         if (listenuebersicht == null || !listenuebersicht.istLokalVerfuegbar(zaehlerliste.getId())) {
+            if(artikelRepository.istSqlMengenabgleichVerfuegbar()) {
+                starteArtikeluebersicht(zaehlerliste,false);
+                return;
+            }
             Toast.makeText(this, R.string.listenquelle_nur_blattkopf, Toast.LENGTH_LONG).show();
             return;
         }
@@ -228,10 +232,19 @@ public class ZaehlerlistenActivity extends AppCompatActivity {
             return;
         }
 
-        boolean hatOffeneSynchronisierung = hatOffeneSynchronisierungInAktuellerAuswahl();
+        boolean hatOffeneSynchronisierung = artikelRepository.hatOffeneMengensynchronisierung(null);
         syncStatusContainer.setVisibility(View.VISIBLE);
-        if (artikelRepository.istSqlSchreibenGesperrt()) {
-            syncStatusTextView.setText(R.string.sync_status_sql_gesperrt);
+        if (!hatOffeneSynchronisierung) {
+            syncStatusTextView.setText(R.string.sync_status_erfolgreich);
+            syncStatusTextView.setTextColor(Color.parseColor("#B6F0C2"));
+            syncStatusInfoButton.setVisibility(View.VISIBLE);
+        } else if (artikelRepository.istSqlMengenabgleichVerfuegbar()) {
+            syncStatusTextView.setText(getString(R.string.sync_status_sql_mengen));
+            syncStatusTextView.setTextColor(Color.parseColor("#FFE19A"));
+            syncStatusInfoButton.setVisibility(View.VISIBLE);
+        } else if (artikelRepository.istSqlSchreibenGesperrt()) {
+            syncStatusTextView.setText(getString(R.string.sync_status_offen) + "\n"
+                    + getString(R.string.sync_uebertragung_deaktiviert));
             syncStatusTextView.setTextColor(Color.parseColor("#FFE19A"));
             syncStatusInfoButton.setVisibility(View.VISIBLE);
         } else if (hatOffeneSynchronisierung && !netzwerkVerfuegbar) {
@@ -239,44 +252,37 @@ public class ZaehlerlistenActivity extends AppCompatActivity {
             syncStatusTextView.setTextColor(Color.parseColor("#FFE19A"));
             syncStatusInfoButton.setVisibility(View.VISIBLE);
         } else {
-            syncStatusTextView.setText(hatOffeneSynchronisierung
-                    ? R.string.sync_status_offen
-                    : R.string.sync_status_erfolgreich);
+            syncStatusTextView.setText(R.string.sync_status_offen);
             syncStatusTextView.setTextColor(Color.parseColor(hatOffeneSynchronisierung ? "#FFE19A" : "#B6F0C2"));
             syncStatusInfoButton.setVisibility(hatOffeneSynchronisierung ? View.VISIBLE : View.GONE);
         }
         syncStatusInfoButton.setOnClickListener(v -> zeigeSynchronisierungsdetails());
     }
 
+    private String holeSperrdiagnoseText() {
+        if (artikelRepository == null) return Synchronisierungsdiagnose.nichtVerfuegbar().getDetails();
+        StringBuilder text = new StringBuilder();
+        if (ausgewaehlteZaehlerlistenId > 0) {
+            text.append(getString(R.string.sync_diagnose_aktuelles_blatt)).append("\n")
+                    .append(artikelRepository.holeSynchronisierungsdiagnose(ausgewaehlteZaehlerlistenId).getDetails())
+                    .append("\n").append(artikelRepository.beschreibeOffeneEinzelfelder(ausgewaehlteZaehlerlistenId))
+                    .append("\n\n");
+        }
+        text.append(getString(R.string.sync_diagnose_gesamt)).append("\n")
+                .append(artikelRepository.holeSynchronisierungsdiagnose(null).getDetails());
+        if (artikelRepository.istSqlMengenabgleichVerfuegbar()) {
+            text.append("\n\nMengenabgleich in der Artikelansicht verfuegbar. Ungeklaerte Zuordnungen und unklare SQL-Versuche bleiben offen. Nur Mengen und ungeklaerte Mengenauftraege sperren. Notizen, Kopf und Abschluss bleiben lokal und blockieren nicht.");
+        } else if (artikelRepository.istSqlSchreibenGesperrt()) {
+            text.append("\n\n").append(getString(R.string.sync_uebertragung_deaktiviert))
+                    .append("\n").append(getString(R.string.sync_freigabe_voraussetzungen));
+        }
+        return text.toString();
+    }
+
     private void zeigeSynchronisierungsdetails() {
-        if (artikelRepository.istSqlSchreibenGesperrt()) {
-            new AlertDialog.Builder(this)
-                    .setTitle(R.string.sync_status_sql_gesperrt)
-                    .setMessage(R.string.sync_status_sql_gesperrt_detail)
-                    .setPositiveButton(android.R.string.ok, (dialog, which) -> dialog.dismiss())
-                    .show();
-            return;
-        }
-        boolean hatOffeneSynchronisierung = hatOffeneSynchronisierungInAktuellerAuswahl();
-        if (!netzwerkVerfuegbar && hatOffeneSynchronisierung) {
-            new AlertDialog.Builder(this)
-                    .setTitle(R.string.sync_status_dialog_titel)
-                    .setMessage(R.string.sync_status_kein_netzwerk_detail)
-                    .setPositiveButton(android.R.string.ok, (dialog, which) -> dialog.dismiss())
-                    .show();
-            return;
-        }
-        if (!hatOffeneSynchronisierung) {
-            new AlertDialog.Builder(this)
-                    .setTitle(R.string.sync_status_dialog_titel)
-                    .setMessage(R.string.sync_status_kein_offener_sync_detail)
-                    .setPositiveButton(android.R.string.ok, (dialog, which) -> dialog.dismiss())
-                    .show();
-            return;
-        }
         new AlertDialog.Builder(this)
                 .setTitle(R.string.sync_status_dialog_titel)
-                .setMessage(artikelRepository.holeLetzteSynchronisierungsFehlermeldung())
+                .setMessage(holeSperrdiagnoseText())
                 .setPositiveButton(android.R.string.ok, (dialog, which) -> dialog.dismiss())
                 .show();
     }
@@ -306,46 +312,34 @@ public class ZaehlerlistenActivity extends AppCompatActivity {
     }
 
     private void versucheZumHauptmenueZurueckzukehren() {
-        if (!AppContainer.istApiModusAktiv() || artikelRepository == null
-                || artikelRepository.istSqlSchreibenGesperrt() || !hatOffeneSynchronisierungInAktuellerAuswahl()) {
+        if (!AppContainer.istApiModusAktiv() || (artikelRepository != null
+                && artikelRepository.istHauptmenueRueckkehrErlaubt())) {
             finish();
             return;
         }
         zeigeHauptmenueBlockiertDialog();
     }
 
-    private boolean hatOffeneSynchronisierungInAktuellerAuswahl() {
-        if (artikelRepository == null) {
-            return false;
-        }
-        if (aktuellAngezeigteZaehlerlisten == null || aktuellAngezeigteZaehlerlisten.isEmpty()) {
-            return artikelRepository.hatOffeneSynchronisierung();
-        }
-        for (Zaehlerliste zaehlerliste : aktuellAngezeigteZaehlerlisten) {
-            if (zaehlerliste != null && artikelRepository.hatOffeneSynchronisierungFuerZaehlerliste(zaehlerliste.getId())) {
-                return true;
-            }
-        }
-        return false;
-    }
-
     private void zeigeHauptmenueBlockiertDialog() {
-        new AlertDialog.Builder(this)
+        AlertDialog.Builder dialog = new AlertDialog.Builder(this)
                 .setTitle(R.string.sync_hauptmenue_blockiert_titel)
-                .setMessage(getString(netzwerkVerfuegbar
-                        ? R.string.sync_hauptmenue_blockiert_offen_text
-                        : R.string.sync_hauptmenue_blockiert_offline_text))
-                .setPositiveButton(R.string.sync_hauptmenue_dialog_retry, (dialog, which) -> versucheSynchronisierungVorRueckkehr())
-                .setNegativeButton(R.string.sync_hauptmenue_dialog_bleiben, (dialog, which) -> dialog.dismiss())
-                .show();
+                .setMessage(holeSperrdiagnoseText())
+                .setNegativeButton(R.string.sync_hauptmenue_dialog_bleiben, (fenster, which) -> fenster.dismiss());
+        if (artikelRepository != null && !artikelRepository.istSqlSchreibenGesperrt()) {
+            dialog.setPositiveButton(R.string.sync_hauptmenue_dialog_retry,
+                    (fenster, which) -> versucheSynchronisierungVorRueckkehr());
+        }
+        dialog.show();
     }
 
     private void versucheSynchronisierungVorRueckkehr() {
-        if (!hatOffeneSynchronisierungInAktuellerAuswahl()) {
+        if (artikelRepository != null && artikelRepository.istHauptmenueRueckkehrErlaubt()) {
             finish();
             return;
         }
-        ladeZaehlerlistenInDieAnsicht();
+        if (artikelRepository != null && !artikelRepository.istSqlSchreibenGesperrt()) {
+            ladeZaehlerlistenInDieAnsicht();
+        }
         zeigeHauptmenueBlockiertDialog();
     }
 }

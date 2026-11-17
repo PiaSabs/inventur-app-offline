@@ -31,8 +31,8 @@ public final class ArtikelMapper {
                 dto.getMindestbestand(),
                 dto.getZaehlMenge(),
                 dto.getAnmerkung(),
-                    dto.getSqlPositionsId(),
-                    dto.getQuellBlattnummer()
+                dto.getSqlPositionsId(),
+                dto.getQuellBlattnummer()
         );
     }
 }

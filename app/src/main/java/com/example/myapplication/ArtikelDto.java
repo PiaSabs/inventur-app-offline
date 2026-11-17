@@ -5,6 +5,7 @@ public class ArtikelDto {
     private final int positionsNummer;
     private final Long sqlPositionsId;
     private final Integer quellBlattnummer;
+    private final SqlServerMengenSchreibversuch.Ausgangsstand sqlErgebnis;
     private final String artikelnummer;
     private final String bezeichnung;
     private final String lagerort;
@@ -65,6 +66,7 @@ public class ArtikelDto {
                 && quellBlattnummer != null && quellBlattnummer > 0;
         this.sqlPositionsId = zugeordnet ? sqlPositionsId : null;
         this.quellBlattnummer = zugeordnet ? quellBlattnummer : null;
+        this.sqlErgebnis = null;
         this.positionsNummer = positionsNummer;
         this.artikelnummer = artikelnummer;
         this.bezeichnung = bezeichnung;
@@ -75,6 +77,20 @@ public class ArtikelDto {
         this.zaehlMenge = zaehlMenge;
         this.anmerkung = anmerkung == null ? "" : anmerkung;
     }
+
+    private ArtikelDto(ArtikelDto basis,SqlServerMengenSchreibversuch.Ausgangsstand ergebnis) {
+        if(ergebnis==null || basis.sqlPositionsId==null || basis.quellBlattnummer==null
+                || ergebnis.positionsId!=basis.sqlPositionsId || ergebnis.blatt!=basis.quellBlattnummer
+                || ergebnis.position!=basis.positionsNummer || !ergebnis.artikel.equals(basis.artikelnummer))
+            throw new IllegalArgumentException("SQL-Ergebnis gehoert nicht zur Artikelposition.");
+        sqlPositionsId=basis.sqlPositionsId;quellBlattnummer=basis.quellBlattnummer;sqlErgebnis=ergebnis;
+        positionsNummer=basis.positionsNummer;artikelnummer=basis.artikelnummer;bezeichnung=basis.bezeichnung;
+        lagerort=basis.lagerort;istMenge=basis.istMenge;letzteZaehlmenge=basis.letzteZaehlmenge;
+        mindestbestand=basis.mindestbestand;anmerkung=basis.anmerkung;
+        zaehlMenge=ergebnis.menge==null?null:ergebnis.menge.intValueExact();
+    }
+    public ArtikelDto mitSqlErgebnis(SqlServerMengenSchreibversuch.Ausgangsstand ergebnis) {return new ArtikelDto(this,ergebnis);}
+    public SqlServerMengenSchreibversuch.Ausgangsstand getSqlErgebnis() {return sqlErgebnis;}
 
     public Long getSqlPositionsId() { return sqlPositionsId; }
 

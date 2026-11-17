@@ -31,8 +31,6 @@ public class ApiInventurRemoteDataSource implements InventurRemoteDataSource {
             "Bestandsz\u00E4hlungen2",
             "Bestandszaehlungen2"
     };
-    private static final SimpleDateFormat ANZEIGE_DATUMSFORMAT = new SimpleDateFormat("dd.MM.yyyy", Locale.GERMANY);
-    private static final SimpleDateFormat SQL_LITE_DATUMSFORMAT = new SimpleDateFormat("yyyy-MM-dd", Locale.GERMANY);
 
     private final LokalerInventurSpeicher lokalerInventurSpeicher;
     private String letzteDiagnose = "";
@@ -44,6 +42,14 @@ public class ApiInventurRemoteDataSource implements InventurRemoteDataSource {
     @Override
     public boolean istSchreibgeschuetzt() { return !SqlServerSchreibschutz.istSchreibenErlaubt(); }
 
+    public SqlServerMengenSchreibversuch kontrollierterMengenversuch() throws SQLException {
+        SqlServerSchreibschutz.pruefeKontrolliertenEinzelversuch();
+        return new SqlServerMengenSchreibversuch(() -> {
+            SqlServerSchreibschutz.pruefeKontrolliertenEinzelversuch();
+            return oeffneJdbcVerbindung();
+        }, true);
+    }
+
     @Override
     public void pruefeVerbindung() throws RemoteDatenException {
         pruefeKonfiguration();
@@ -53,7 +59,7 @@ public class ApiInventurRemoteDataSource implements InventurRemoteDataSource {
             if (!resultSet.next()) {
                 throw new RemoteDatenException("SQL-Server-Verbindungspruefung lieferte kein Ergebnis.");
             }
-        } catch (SQLException | ClassNotFoundException exception) {
+        } catch (SQLException exception) {
             throw new RemoteDatenException("SQL-Server-Verbindungspruefung fehlgeschlagen.", exception);
         }
     }
@@ -115,7 +121,7 @@ public class ApiInventurRemoteDataSource implements InventurRemoteDataSource {
                 ));
             }
             return zaehlerlisten;
-        } catch (SQLException | ClassNotFoundException exception) {
+        } catch (SQLException exception) {
             throw new RemoteDatenException("SQL-Server-Laden der aktiven Zaehlerlisten fehlgeschlagen.", exception);
         }
     }
@@ -126,8 +132,18 @@ public class ApiInventurRemoteDataSource implements InventurRemoteDataSource {
 
         String stichtag = ermittleOderInitialisiereStichtag(zaehlerlistenId);
         List<ArtikelDto> artikelListe = new ArrayList<>();
+        SqlServerMengenSchreibversuch leser = new SqlServerMengenSchreibversuch(this::oeffneVerbindung, true);
         for (LokalerInventurSpeicher.BestandszaehlungSeed seed : ladeSeedsAusSqlZaehlliste(zaehlerlistenId, stichtag)) {
-            artikelListe.add(mappeSqlPosition(seed, zaehlerlistenId));
+            ArtikelDto artikel=mappeSqlPosition(seed, zaehlerlistenId);
+            try {
+                artikel=artikel.mitSqlErgebnis(leser.leseAmStichtag(zaehlerlistenId,artikel.getPositionsNummer(),stichtag));
+            } catch(SQLException e) {
+                if(!"23000".equals(e.getSQLState()))throw new RemoteDatenException("SQL-Ergebniszuordnung konnte nicht vollstaendig geladen werden.",e);
+                // Fehlende oder mehrdeutige Ergebnisse bleiben lesbar, aber ohne Schreibfreigabe.
+            } catch(IllegalArgumentException|ArithmeticException e) {
+                // Keine gerundete oder widerspruechliche Menge als SQL-Ausgangsstand verwenden.
+            }
+            artikelListe.add(artikel);
         }
         aktualisiereLadeDiagnose(zaehlerlistenId, stichtag, artikelListe);
         return artikelListe;
@@ -141,21 +157,36 @@ public class ApiInventurRemoteDataSource implements InventurRemoteDataSource {
     }
 
     @Override
+    public List<SqlPosition> ladeSqlPositionen(int blattId) throws RemoteDatenException {
+        pruefeKonfiguration();
+        String sql = "SELECT IDSQL, BlattNr, PosNr, IdentNr FROM "
+                + qualifizierterTabellenname(TABELLE_ZAEHLLISTE) + " WHERE BlattNr = ?";
+        List<SqlPosition> positionen = new ArrayList<>();
+        try (Connection connection = oeffneVerbindung();
+             PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setInt(1, blattId);
+            try (ResultSet rows = statement.executeQuery()) {
+                while (rows.next()) {
+                    long id = rows.getLong("IDSQL");
+                    Long quellId = rows.wasNull() ? null : id;
+                    int blatt = rows.getInt("BlattNr");
+                    Integer quellBlatt = rows.wasNull() ? null : blatt;
+                    int position = rows.getInt("PosNr");
+                    Integer quellPosition = rows.wasNull() ? null : position;
+                    // Auch unvollstaendige Zeilen melden; keine Ersatzidentitaeten bilden.
+                    positionen.add(new SqlPosition(quellId, quellBlatt, quellPosition, rows.getString("IdentNr")));
+                }
+            }
+            return positionen;
+        } catch (SQLException exception) {
+            throw new RemoteDatenException("SQL-Positionspruefung fehlgeschlagen.", exception);
+        }
+    }
+
+    @Override
     public ZaehlmengenSpeicherAntwort speichereZaehlmengen(ZaehlmengenSpeicherAnfrage anfrage) throws RemoteDatenException {
         SqlServerSchreibschutz.pruefeSchreiben();
-        if (anfrage == null || anfrage.getZaehlerlistenId() <= 0 || anfrage.getPositionen() == null || anfrage.getPositionen().isEmpty()) {
-            throw new RemoteDatenException("Die Zaehlmengen-Anfrage ist unvollstaendig.");
-        }
-
-        String stichtag = ermittleOderInitialisiereStichtag(anfrage.getZaehlerlistenId());
-
-        pruefeKonfiguration();
-        speichereZaehlmengenInSqlServer(anfrage, stichtag);
-        return new ZaehlmengenSpeicherAntwort(
-                true,
-                "In Datenbank gespeichert. Stichtag: " + formatiereAnzeigeDatum(stichtag),
-                "BESTANDS-" + anfrage.getZaehlerlistenId() + "-" + stichtag
-        );
+        throw new RemoteDatenException("Pauschale SQL-Listenuebertragung ist deaktiviert.");
     }
 
     @Override
@@ -168,18 +199,22 @@ public class ApiInventurRemoteDataSource implements InventurRemoteDataSource {
         return letzteDiagnose == null ? "" : letzteDiagnose;
     }
 
-    private Connection oeffneVerbindung() throws SQLException, ClassNotFoundException {
-        Class.forName("net.sourceforge.jtds.jdbc.Driver");
+    private Connection oeffneVerbindung() throws SQLException {
         DriverManager.setLoginTimeout(3);
-        String url = "jdbc:jtds:sqlserver://"
-                + SqlServerKonfiguration.HOST
-                + ":"
-                + SqlServerKonfiguration.PORT
-                + "/"
-                + SqlServerKonfiguration.DATENBANK
+        return SqlServerSchreibschutz.sichere(oeffneJdbcVerbindung());
+    }
+
+    private Connection oeffneJdbcVerbindung() throws SQLException {
+        try {
+            Class.forName("net.sourceforge.jtds.jdbc.Driver");
+        } catch (ClassNotFoundException exception) {
+            throw new SQLException("JDBC-Treiber fehlt.", "08001");
+        }
+        String url = "jdbc:jtds:sqlserver://" + SqlServerKonfiguration.HOST + ":"
+                + SqlServerKonfiguration.PORT + "/" + SqlServerKonfiguration.DATENBANK
                 + ";useLOBs=false;loginTimeout=5;socketTimeout=15;";
-        return SqlServerSchreibschutz.sichere(DriverManager.getConnection(url,
-                SqlServerKonfiguration.BENUTZERNAME, SqlServerKonfiguration.PASSWORT));
+        return DriverManager.getConnection(url,
+                SqlServerKonfiguration.BENUTZERNAME, SqlServerKonfiguration.PASSWORT);
     }
 
     private void pruefeKonfiguration() throws RemoteDatenException {
@@ -257,13 +292,13 @@ public class ApiInventurRemoteDataSource implements InventurRemoteDataSource {
                     }
                     Timestamp zeitstempel = resultSet.getTimestamp(1);
                     if (zeitstempel != null) {
-                        return SQL_LITE_DATUMSFORMAT.format(new Date(zeitstempel.getTime()));
+                        return new SimpleDateFormat("yyyy-MM-dd", Locale.GERMANY).format(new Date(zeitstempel.getTime()));
                     }
                     String rohwert = resultSet.getString(1);
                     return parseSqlDatumNachSqlLite(rohwert);
                 }
             }
-        } catch (SQLException | ClassNotFoundException exception) {
+        } catch (SQLException exception) {
             throw new RemoteDatenException("SQL-Server-Stichtag fuer Blatt " + blattNr + " konnte nicht geladen werden.", exception);
         }
     }
@@ -339,7 +374,7 @@ public class ApiInventurRemoteDataSource implements InventurRemoteDataSource {
                 }
             }
             }
-        } catch (SQLException | ClassNotFoundException exception) {
+        } catch (SQLException exception) {
             throw new RemoteDatenException("SQL-Server-Positionen fuer Blatt " + blattNr + " konnten nicht geladen werden.", exception);
         }
 
@@ -348,8 +383,8 @@ public class ApiInventurRemoteDataSource implements InventurRemoteDataSource {
 
     private String formatiereAnzeigeDatum(String sqlLiteDatum) {
         try {
-            Date datum = SQL_LITE_DATUMSFORMAT.parse(sqlLiteDatum);
-            return datum == null ? "unbekannt" : ANZEIGE_DATUMSFORMAT.format(datum);
+            Date datum = new SimpleDateFormat("yyyy-MM-dd", Locale.GERMANY).parse(sqlLiteDatum);
+            return datum == null ? "unbekannt" : new SimpleDateFormat("dd.MM.yyyy", Locale.GERMANY).format(datum);
         } catch (Exception exception) {
             return sqlLiteDatum == null ? "unbekannt" : sqlLiteDatum;
         }
@@ -359,7 +394,7 @@ public class ApiInventurRemoteDataSource implements InventurRemoteDataSource {
         if (zeitstempel == null) {
             return "unbekannt";
         }
-        return ANZEIGE_DATUMSFORMAT.format(new Date(zeitstempel.getTime()));
+        return new SimpleDateFormat("dd.MM.yyyy", Locale.GERMANY).format(new Date(zeitstempel.getTime()));
     }
 
 
@@ -373,7 +408,7 @@ public class ApiInventurRemoteDataSource implements InventurRemoteDataSource {
         statement.setInt(1, blattNr);
         statement.setInt(2, positionsNummer);
         statement.setString(3, identnummer);
-        statement.setString(4, stichtag);
+        statement.setTimestamp(4, Timestamp.valueOf(stichtag+" 00:00:00"));
         try (ResultSet resultSet = statement.executeQuery()) {
             if (!resultSet.next() || resultSet.getObject(1) == null) {
                 return null;
@@ -392,7 +427,7 @@ public class ApiInventurRemoteDataSource implements InventurRemoteDataSource {
         statement.setInt(1, blattNr);
         statement.setInt(2, positionsNummer);
         statement.setString(3, identnummer);
-        statement.setString(4, stichtag);
+        statement.setTimestamp(4, Timestamp.valueOf(stichtag+" 00:00:00"));
         try (ResultSet resultSet = statement.executeQuery()) {
             if (!resultSet.next()) {
                 return new Integer[]{null, 0};
@@ -413,7 +448,7 @@ public class ApiInventurRemoteDataSource implements InventurRemoteDataSource {
     }
 
     private String ermittleHeutigesDatum() {
-        return SQL_LITE_DATUMSFORMAT.format(new Date());
+        return new SimpleDateFormat("yyyy-MM-dd", Locale.GERMANY).format(new Date());
     }
 
     static String parseSqlDatumNachSqlLite(String rohwert) {
@@ -435,97 +470,6 @@ public class ApiInventurRemoteDataSource implements InventurRemoteDataSource {
         return "WO".equals(normalisiert) || "BC".equals(normalisiert) || "MO".equals(normalisiert);
     }
 
-    private boolean istBeispielBlatt(int blattNr) {
-        return blattNr >= 9001 && blattNr <= 9020;
-    }
-
-    private void speichereZaehlmengenInSqlServer(ZaehlmengenSpeicherAnfrage anfrage, String stichtag) throws RemoteDatenException {
-        SqlServerSchreibschutz.pruefeSchreiben();
-        try (Connection connection = oeffneVerbindung()) {
-            connection.setAutoCommit(false);
-            try {
-                BestandszaehlungenSqlInfo bestandszaehlungenInfo = ermittleBestandszaehlungenSqlInfo(connection);
-                List<Artikel> lokaleArtikel = lokalerInventurSpeicher.ladeArtikel(anfrage.getZaehlerlistenId());
-
-                String quelleSqlNachPosition = "SELECT PosNr, IdentNr, Lagerort, IDSQL FROM "
-                        + qualifizierterTabellenname(TABELLE_ZAEHLLISTE)
-                        + " WHERE BlattNr = ? AND PosNr = ?";
-                String quelleSqlNachIdent = "SELECT TOP 1 PosNr, IdentNr, Lagerort, IDSQL FROM "
-                        + qualifizierterTabellenname(TABELLE_ZAEHLLISTE)
-                        + " WHERE BlattNr = ? AND LTRIM(RTRIM(COALESCE(IdentNr, ''))) = ?"
-                        + " ORDER BY PosNr";
-
-                String insertSpalten = bestandszaehlungenInfo.idSqlIstIdentity
-                        ? bestandszaehlungenInfo.identNrBestand + ", " + bestandszaehlungenInfo.datum + ", " + bestandszaehlungenInfo.lagerort + ", "
-                        + bestandszaehlungenInfo.menge + ", " + bestandszaehlungenInfo.blattNr + ", " + bestandszaehlungenInfo.posNr + ", " + bestandszaehlungenInfo.mengeLager + ", "
-                        + bestandszaehlungenInfo.zaehlNr + ", " + bestandszaehlungenInfo.hinweis + ", " + bestandszaehlungenInfo.gesamtMenge + ", " + bestandszaehlungenInfo.mengeOffen + ", "
-                        + bestandszaehlungenInfo.bestellMenge + ", " + bestandszaehlungenInfo.bedarf + ", " + bestandszaehlungenInfo.geprueftKz + ", " + bestandszaehlungenInfo.datInventur
-                        : bestandszaehlungenInfo.idSql + ", " + bestandszaehlungenInfo.identNrBestand + ", " + bestandszaehlungenInfo.datum + ", " + bestandszaehlungenInfo.lagerort + ", "
-                        + bestandszaehlungenInfo.menge + ", " + bestandszaehlungenInfo.blattNr + ", " + bestandszaehlungenInfo.posNr + ", " + bestandszaehlungenInfo.mengeLager + ", "
-                        + bestandszaehlungenInfo.zaehlNr + ", " + bestandszaehlungenInfo.hinweis + ", " + bestandszaehlungenInfo.gesamtMenge + ", " + bestandszaehlungenInfo.mengeOffen + ", "
-                        + bestandszaehlungenInfo.bestellMenge + ", " + bestandszaehlungenInfo.bedarf + ", " + bestandszaehlungenInfo.geprueftKz + ", " + bestandszaehlungenInfo.datInventur;
-                String insertWerte = bestandszaehlungenInfo.idSqlIstIdentity
-                        ? "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
-                        : "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
-
-                String speicherSql = "IF EXISTS (SELECT 1 FROM " + bestandszaehlungenInfo.tabellenname + " WHERE " + bestandszaehlungenInfo.blattNr + " = ? AND " + bestandszaehlungenInfo.datum + " = ? AND " + bestandszaehlungenInfo.posNr + " = ?) "
-                        + "BEGIN "
-                        + "UPDATE " + bestandszaehlungenInfo.tabellenname + " "
-                        + "SET " + bestandszaehlungenInfo.mengeLager + " = ?, " + bestandszaehlungenInfo.datInventur + " = ?, " + bestandszaehlungenInfo.geprueftKz + " = ? "
-                        + "WHERE " + bestandszaehlungenInfo.blattNr + " = ? AND " + bestandszaehlungenInfo.datum + " = ? AND " + bestandszaehlungenInfo.posNr + " = ? "
-                        + "END "
-                        + "ELSE "
-                        + "BEGIN "
-                        + "INSERT INTO " + bestandszaehlungenInfo.tabellenname + " ("
-                        + insertSpalten
-                        + ") VALUES " + insertWerte + " "
-                        + "END";
-                String pruefSql = "SELECT TOP 1 " + bestandszaehlungenInfo.mengeLager + " FROM " + bestandszaehlungenInfo.tabellenname + " "
-                        + "WHERE " + bestandszaehlungenInfo.blattNr + " = ? AND " + bestandszaehlungenInfo.posNr + " = ? "
-                        + "AND " + bestandszaehlungenInfo.identNrBestand + " = ? AND " + bestandszaehlungenInfo.datum + " = ? "
-                        + "ORDER BY " + bestandszaehlungenInfo.datum + " DESC";
-
-                try (PreparedStatement quelleStatementNachPosition = connection.prepareStatement(quelleSqlNachPosition);
-                     PreparedStatement quelleStatementNachIdent = connection.prepareStatement(quelleSqlNachIdent);
-                     PreparedStatement speicherStatement = connection.prepareStatement(speicherSql);
-                     PreparedStatement pruefStatement = connection.prepareStatement(pruefSql)) {
-                    for (ZaehlmengenSpeicherPositionDto position : anfrage.getPositionen()) {
-                        PositionSqlInfo sqlInfo = ladePositionSqlInfo(
-                                quelleStatementNachPosition,
-                                quelleStatementNachIdent,
-                                anfrage.getZaehlerlistenId(),
-                                position
-                        );
-                        Artikel lokalerArtikel = findeLokalenArtikel(lokaleArtikel, position);
-                        schreibePositionInSqlServer(
-                                speicherStatement,
-                                bestandszaehlungenInfo,
-                                anfrage.getZaehlerlistenId(),
-                                stichtag,
-                                position,
-                                sqlInfo,
-                                lokalerArtikel
-                        );
-                        pruefeGeschriebenePositionInSqlServer(
-                                pruefStatement,
-                                bestandszaehlungenInfo,
-                                anfrage.getZaehlerlistenId(),
-                                stichtag,
-                                position,
-                                sqlInfo
-                        );
-                    }
-                }
-
-                connection.commit();
-            } catch (SQLException | RemoteDatenException exception) {
-                try { connection.rollback(); } catch (SQLException rollbackFehler) { exception.addSuppressed(rollbackFehler); }
-                throw exception;
-            }
-        } catch (SQLException | ClassNotFoundException exception) {
-            throw new RemoteDatenException("SQL-Server-Speichern der Zaehlmengen fehlgeschlagen.", exception);
-        }
-    }
 
     private BestandszaehlungenSqlInfo ermittleBestandszaehlungenSqlInfo(Connection connection) throws SQLException {
         Set<String> kandidaten = neueBestandszaehlungenTabellenKandidaten();
@@ -598,33 +542,18 @@ public class ApiInventurRemoteDataSource implements InventurRemoteDataSource {
              ResultSet resultSet = statement.executeQuery()) {
             ResultSetMetaData metaData = resultSet.getMetaData();
             List<String> spaltennamen = new ArrayList<>();
-            int idSqlSpaltenIndex = -1;
             for (int index = 1; index <= metaData.getColumnCount(); index++) {
                 String spaltenname = metaData.getColumnName(index);
                 spaltennamen.add(spaltenname);
-                if (normalisiereSqlNamen(spaltenname).equals(normalisiereSqlNamen("id_sql"))) {
-                    idSqlSpaltenIndex = index;
-                }
             }
             return new BestandszaehlungenSqlInfo(
                     tabellenname,
-                    findeSpaltennamen(spaltennamen, "id_sql", "idsql", "idsqlbestand"),
                     findeSpaltennamen(spaltennamen, "ident_nr_bestand", "identnrbestand", "ident_nr", "identnr"),
                     findeSpaltennamen(spaltennamen, "datum"),
-                    findeSpaltennamen(spaltennamen, "lagerort"),
                     findeSpaltennamen(spaltennamen, "menge"),
                     findeSpaltennamen(spaltennamen, "blatt_nr", "blattnr"),
                     findeSpaltennamen(spaltennamen, "pos_nr", "posnr"),
-                    findeSpaltennamen(spaltennamen, "menge_lager", "mengelager"),
-                    findeSpaltennamen(spaltennamen, "zaehl_nr", "zaehlnr"),
-                    findeSpaltennamen(spaltennamen, "hinweis"),
-                    findeSpaltennamen(spaltennamen, "gesamt_menge", "gesamtmenge"),
-                    findeSpaltennamen(spaltennamen, "menge_offen", "mengeoffen"),
-                    findeSpaltennamen(spaltennamen, "bestell_menge", "bestellmenge"),
-                    findeSpaltennamen(spaltennamen, "bedarf"),
-                    findeSpaltennamen(spaltennamen, "geprueft_kz", "geprueftkz"),
-                    findeSpaltennamen(spaltennamen, "dat_inventur", "datinventur"),
-                    idSqlSpaltenIndex > 0 && metaData.isAutoIncrement(idSqlSpaltenIndex)
+                    findeSpaltennamen(spaltennamen, "menge_lager", "mengelager")
             );
         }
     }
@@ -654,202 +583,6 @@ public class ApiInventurRemoteDataSource implements InventurRemoteDataSource {
                 .replace("ß", "ss")
                 .replace("_", "")
                 .replace(" ", "");
-    }
-
-    private PositionSqlInfo ladePositionSqlInfo(
-            PreparedStatement quelleStatementNachPosition,
-            PreparedStatement quelleStatementNachIdent,
-            int blattNr,
-            ZaehlmengenSpeicherPositionDto position
-    ) throws SQLException, RemoteDatenException {
-        quelleStatementNachPosition.clearParameters();
-        quelleStatementNachPosition.setInt(1, blattNr);
-        quelleStatementNachPosition.setInt(2, position.getPositionsNummer());
-        try (ResultSet resultSet = quelleStatementNachPosition.executeQuery()) {
-            if (!resultSet.next()) {
-                return ladePositionSqlInfoPerIdentnummer(
-                        quelleStatementNachIdent,
-                        blattNr,
-                        position
-                );
-            }
-
-            String identNr = liesText(resultSet, "IdentNr", position.getArtikelnummer());
-            if (!identNr.equals(position.getArtikelnummer().trim())) {
-                throw new RemoteDatenException("Die Artikelzuordnung auf dem SQL-Server hat sich geaendert. Blatt bitte neu laden.");
-            }
-            String lagerort = liesText(resultSet, "Lagerort", "0");
-            if (lagerort.isEmpty()) {
-                lagerort = "0";
-            }
-
-            return new PositionSqlInfo(
-                    resultSet.getInt("IDSQL"),
-                    resultSet.getInt("PosNr"),
-                    identNr,
-                    lagerort
-            );
-        }
-    }
-
-    private PositionSqlInfo ladePositionSqlInfoPerIdentnummer(
-            PreparedStatement quelleStatementNachIdent,
-            int blattNr,
-            ZaehlmengenSpeicherPositionDto position
-    ) throws SQLException, RemoteDatenException {
-        String artikelnummer = position.getArtikelnummer() == null ? "" : position.getArtikelnummer().trim();
-        if (artikelnummer.isEmpty()) {
-            throw new RemoteDatenException("Position " + position.getPositionsNummer() + " fuer Blatt " + blattNr + " wurde auf dem SQL-Server nicht gefunden.");
-        }
-
-        quelleStatementNachIdent.clearParameters();
-        quelleStatementNachIdent.setInt(1, blattNr);
-        quelleStatementNachIdent.setString(2, artikelnummer);
-        try (ResultSet resultSet = quelleStatementNachIdent.executeQuery()) {
-            if (!resultSet.next()) {
-                throw new RemoteDatenException("Position " + position.getPositionsNummer() + " fuer Blatt " + blattNr + " wurde auf dem SQL-Server nicht gefunden.");
-            }
-
-            String identNr = liesText(resultSet, "IdentNr", artikelnummer);
-            String lagerort = liesText(resultSet, "Lagerort", "0");
-            if (lagerort.isEmpty()) {
-                lagerort = "0";
-            }
-
-            return new PositionSqlInfo(
-                    resultSet.getInt("IDSQL"),
-                    resultSet.getInt("PosNr"),
-                    identNr,
-                    lagerort
-            );
-        }
-    }
-
-    private Artikel findeLokalenArtikel(List<Artikel> lokaleArtikel, ZaehlmengenSpeicherPositionDto position) {
-        for (Artikel artikel : lokaleArtikel) {
-            if (artikel.getPositionsNummer() == position.getPositionsNummer()) {
-                return artikel;
-            }
-        }
-        return null;
-    }
-
-    private void schreibePositionInSqlServer(
-            PreparedStatement speicherStatement,
-            BestandszaehlungenSqlInfo bestandszaehlungenInfo,
-            int blattNr,
-            String stichtag,
-            ZaehlmengenSpeicherPositionDto position,
-            PositionSqlInfo sqlInfo,
-            Artikel lokalerArtikel
-    ) throws SQLException {
-        int posNr = sqlInfo.positionsNummer > 0 ? sqlInfo.positionsNummer : position.getPositionsNummer();
-        int istMenge = lokalerArtikel == null ? 0 : lokalerArtikel.getIstMenge();
-
-        speicherStatement.clearParameters();
-        speicherStatement.setInt(1, blattNr);
-        speicherStatement.setString(2, stichtag);
-        speicherStatement.setInt(3, posNr);
-        if (position.getZaehlMenge() == null) {
-            speicherStatement.setNull(4, java.sql.Types.INTEGER);
-        } else {
-            speicherStatement.setInt(4, position.getZaehlMenge());
-        }
-        speicherStatement.setString(5, stichtag);
-        speicherStatement.setString(6, "N");
-        speicherStatement.setInt(7, blattNr);
-        speicherStatement.setString(8, stichtag);
-        speicherStatement.setInt(9, posNr);
-        int parameterIndex = 10;
-        if (!bestandszaehlungenInfo.idSqlIstIdentity) {
-            speicherStatement.setInt(parameterIndex++, sqlInfo.idSql);
-        }
-        speicherStatement.setString(parameterIndex++, sqlInfo.identNr);
-        speicherStatement.setString(parameterIndex++, stichtag);
-        speicherStatement.setString(parameterIndex++, sqlInfo.lagerort);
-        speicherStatement.setInt(parameterIndex++, istMenge);
-        speicherStatement.setInt(parameterIndex++, blattNr);
-        speicherStatement.setInt(parameterIndex++, posNr);
-        if (position.getZaehlMenge() == null) {
-            speicherStatement.setNull(parameterIndex++, java.sql.Types.INTEGER);
-        } else {
-            speicherStatement.setInt(parameterIndex++, position.getZaehlMenge());
-        }
-        speicherStatement.setInt(parameterIndex++, posNr);
-        speicherStatement.setInt(parameterIndex++, 0);
-        speicherStatement.setInt(parameterIndex++, istMenge);
-        speicherStatement.setInt(parameterIndex++, 0);
-        speicherStatement.setInt(parameterIndex++, 0);
-        speicherStatement.setInt(parameterIndex++, 0);
-        speicherStatement.setString(parameterIndex++, "N");
-        speicherStatement.setString(parameterIndex, stichtag);
-        speicherStatement.executeUpdate();
-    }
-
-    private void pruefeGeschriebenePositionInSqlServer(
-            PreparedStatement pruefStatement,
-            BestandszaehlungenSqlInfo bestandszaehlungenInfo,
-            int blattNr,
-            String stichtag,
-            ZaehlmengenSpeicherPositionDto position,
-            PositionSqlInfo sqlInfo
-    ) throws SQLException, RemoteDatenException {
-        int posNr = sqlInfo.positionsNummer > 0 ? sqlInfo.positionsNummer : position.getPositionsNummer();
-        Integer erwarteteMenge = position.getZaehlMenge();
-
-        pruefStatement.clearParameters();
-        pruefStatement.setInt(1, blattNr);
-        pruefStatement.setInt(2, posNr);
-        pruefStatement.setString(3, sqlInfo.identNr);
-        pruefStatement.setString(4, stichtag);
-
-        try (ResultSet resultSet = pruefStatement.executeQuery()) {
-            if (!resultSet.next()) {
-                throw new RemoteDatenException(
-                        "SQL-Write-Check fehlgeschlagen. Nach dem Speichern wurde kein Datensatz gefunden fuer Blatt "
-                                + blattNr + ", Pos " + posNr + ", Ident " + sqlInfo.identNr + ", Datum " + stichtag + "."
-                );
-            }
-
-            Integer geleseneMenge = resultSet.getObject(1) == null
-                    ? null
-                    : Math.round(resultSet.getFloat(1));
-            aktualisiereSchreibDiagnose(bestandszaehlungenInfo, blattNr, posNr, sqlInfo.identNr, stichtag, erwarteteMenge, geleseneMenge);
-
-            if ((erwarteteMenge == null && geleseneMenge != null)
-                    || (erwarteteMenge != null && !erwarteteMenge.equals(geleseneMenge))) {
-                throw new RemoteDatenException(
-                        "SQL-Write-Check fehlgeschlagen. Blatt " + blattNr
-                                + ", Pos " + posNr
-                                + ", Ident " + sqlInfo.identNr
-                                + ", Datum " + stichtag
-                                + ": erwartet " + (erwarteteMenge == null ? "NULL" : erwarteteMenge)
-                                + ", gelesen " + (geleseneMenge == null ? "NULL" : geleseneMenge) + "."
-                );
-            }
-        }
-    }
-
-    private void aktualisiereSchreibDiagnose(
-            BestandszaehlungenSqlInfo bestandszaehlungenInfo,
-            int blattNr,
-            int posNr,
-            String identNr,
-            String stichtag,
-            Integer erwarteteMenge,
-            Integer geleseneMenge
-    ) {
-        if (!istDiagnoseZiel(blattNr, identNr)) {
-            return;
-        }
-        letzteDiagnose = "SQL-Schreibdiagnose\n"
-                + "Tabelle: " + bestandszaehlungenInfo.tabellenname + "\n"
-                + "Blatt: " + blattNr + "\n"
-                + "Pos: " + posNr + "\n"
-                + "Ident: " + identNr + "\n"
-                + "Stichtag: " + stichtag + "\n"
-                + "Erwartete Menge: " + formatiereDiagnoseWert(erwarteteMenge) + "\n"
-                + "Gelesene SQL-Menge: " + formatiereDiagnoseWert(geleseneMenge);
     }
 
     private void aktualisiereLadeDiagnose(int blattNr, String stichtag, List<ArtikelDto> artikelListe) {
@@ -885,88 +618,35 @@ public class ApiInventurRemoteDataSource implements InventurRemoteDataSource {
         letzteDiagnose = diagnose.toString();
     }
 
-    private boolean istDiagnoseZiel(int blattNr, String identNr) {
-        return blattNr == DIAGNOSE_BLATT_NR
-                && identNr != null
-                && DIAGNOSE_IDENT_NR.equalsIgnoreCase(identNr.trim());
-    }
-
     private String formatiereDiagnoseWert(Integer wert) {
         return wert == null ? "NULL" : String.valueOf(wert);
     }
 
-    private static final class PositionSqlInfo {
-        private final int idSql;
-        private final int positionsNummer;
-        private final String identNr;
-        private final String lagerort;
-
-        private PositionSqlInfo(int idSql, int positionsNummer, String identNr, String lagerort) {
-            this.idSql = idSql;
-            this.positionsNummer = positionsNummer;
-            this.identNr = identNr == null ? "" : identNr;
-            this.lagerort = lagerort == null ? "0" : lagerort;
-        }
-    }
-
     private static final class BestandszaehlungenSqlInfo {
         private final String tabellenname;
-        private final String idSql;
         private final String identNrBestand;
         private final String datum;
-        private final String lagerort;
         private final String menge;
         private final String blattNr;
         private final String posNr;
         private final String mengeLager;
-        private final String zaehlNr;
-        private final String hinweis;
-        private final String gesamtMenge;
-        private final String mengeOffen;
-        private final String bestellMenge;
-        private final String bedarf;
-        private final String geprueftKz;
-        private final String datInventur;
-        private final boolean idSqlIstIdentity;
 
         private BestandszaehlungenSqlInfo(
                 String tabellenname,
-                String idSql,
                 String identNrBestand,
                 String datum,
-                String lagerort,
                 String menge,
                 String blattNr,
                 String posNr,
-                String mengeLager,
-                String zaehlNr,
-                String hinweis,
-                String gesamtMenge,
-                String mengeOffen,
-                String bestellMenge,
-                String bedarf,
-                String geprueftKz,
-                String datInventur,
-                boolean idSqlIstIdentity
+                String mengeLager
         ) {
             this.tabellenname = tabellenname;
-            this.idSql = idSql;
             this.identNrBestand = identNrBestand;
             this.datum = datum;
-            this.lagerort = lagerort;
             this.menge = menge;
             this.blattNr = blattNr;
             this.posNr = posNr;
             this.mengeLager = mengeLager;
-            this.zaehlNr = zaehlNr;
-            this.hinweis = hinweis;
-            this.gesamtMenge = gesamtMenge;
-            this.mengeOffen = mengeOffen;
-            this.bestellMenge = bestellMenge;
-            this.bedarf = bedarf;
-            this.geprueftKz = geprueftKz;
-            this.datInventur = datInventur;
-            this.idSqlIstIdentity = idSqlIstIdentity;
         }
     }
 }

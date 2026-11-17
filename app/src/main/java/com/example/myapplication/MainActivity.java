@@ -181,9 +181,17 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
 
-        boolean hatOffeneSynchronisierung = artikelRepository.hatOffeneSynchronisierung();
+        boolean hatOffeneSynchronisierung = artikelRepository.hatOffeneMengensynchronisierung(null);
         syncStatusContainer.setVisibility(View.VISIBLE);
-        if (artikelRepository.istSqlSchreibenGesperrt()) {
+        if (!hatOffeneSynchronisierung) {
+            syncStatusTextView.setText(R.string.sync_status_erfolgreich);
+            syncStatusTextView.setTextColor(Color.parseColor("#B6F0C2"));
+            syncStatusInfoButton.setVisibility(View.VISIBLE);
+        } else if (artikelRepository.istSqlMengenabgleichVerfuegbar()) {
+            syncStatusTextView.setText(R.string.sync_status_sql_mengen);
+            syncStatusTextView.setTextColor(Color.parseColor("#FFE19A"));
+            syncStatusInfoButton.setVisibility(View.VISIBLE);
+        } else if (artikelRepository.istSqlSchreibenGesperrt()) {
             syncStatusTextView.setText(R.string.sync_status_sql_gesperrt);
             syncStatusTextView.setTextColor(Color.parseColor("#FFE19A"));
             syncStatusInfoButton.setVisibility(View.VISIBLE);
@@ -202,6 +210,13 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void zeigeSynchronisierungsdetails() {
+        if (artikelRepository.istSqlMengenabgleichVerfuegbar()) {
+            new AlertDialog.Builder(this).setTitle(R.string.sync_status_sql_mengen)
+                    .setMessage(artikelRepository.holeSynchronisierungsdiagnose(null).getDetails()
+                            + "\nMengen koennen in der Artikelansicht nach eindeutiger Zuordnung synchronisiert werden. Notizen, Kopf und Abschluss bleiben lokal und blockieren die Navigation nicht.")
+                    .setPositiveButton(android.R.string.ok,null).show();
+            return;
+        }
         if (artikelRepository.istSqlSchreibenGesperrt()) {
             new AlertDialog.Builder(this)
                     .setTitle(R.string.sync_status_sql_gesperrt)

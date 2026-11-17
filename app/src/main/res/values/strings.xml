@@ -1,5 +1,6 @@
 
 <resources>
+    <string name="sync_status_sql_mengen">SQL-Mengenabgleich verfügbar – offene Aufgaben prüfen</string>
     <string name="app_name">My Application</string>
     <string name="aktualisieren_beschreibung">Ansicht aktualisieren</string>
     <string name="aktualisieren_startet">Ansicht wird aktualisiert.</string>
@@ -9,7 +10,7 @@
     <string name="artikel_bearbeitung_gesperrt_hinweis">Abgeschlossene BlattNr – Bearbeitung gesperrt.</string>
     <string name="zaehlmenge_ungueltig">Bitte nur ganze Zahlen ab 0 als Zählmenge eingeben.</string>
     <string name="abschluss_offene_artikel_text">Es sind noch %1$d Artikel ohne Zählmenge vorhanden. Trotzdem abschließen?</string>
-    <string name="abschluss_sync_offen_text">Es gibt noch offene lokale Änderungen. Die BlattNr kann abgeschlossen werden, die Übertragung läuft später weiter.</string>
+    <string name="abschluss_sync_offen_text">Es gibt noch offene lokale Änderungen. Abschließen oder offen lassen? In beiden Fällen wird vor dem Verlassen synchronisiert.</string>
     <string name="abschluss_offene_und_sync_text">Es sind noch %1$d Artikel ohne Zählmenge vorhanden und es gibt offene lokale Änderungen. Trotzdem abschließen?</string>
 
     <string name="login_titel">Zähler Login</string>
@@ -165,17 +166,22 @@
     <string name="sync_status_sql_gesperrt">SQL-Testbetrieb – keine Übertragung</string>
     <string name="sync_status_sql_gesperrt_detail">SQL-Daten können gelesen werden. Mengen, Notizen und Abschlüsse werden nur lokal gespeichert. Offene Übertragungen bleiben erhalten und werden nicht an SQL gesendet.</string>
     <string name="abschluss_nur_lokal">Zählblatt lokal abgeschlossen. Keine SQL-Übertragung.</string>
-    <string name="sync_status_erfolgreich">Alles übertragen</string>
-    <string name="sync_status_offen">Lokal gespeichert – Übertragung offen.</string>
+    <string name="sync_status_erfolgreich">Keine unbestätigten Mengen</string>
+    <string name="sync_status_offen">Lokal gespeichert – Mengenübertragung offen.</string>
     <string name="sync_status_kein_netzwerk">Offline – lokal gespeichert.</string>
     <string name="sync_status_kein_netzwerk_detail">Das Tablet hat aktuell keine Netzwerkverbindung. Die App arbeitet mit den lokal gespeicherten Daten weiter und versucht die Synchronisierung erst wieder bei vorhandener Verbindung.</string>
     <string name="sync_status_info_beschreibung">Synchronisierungsdetails anzeigen</string>
     <string name="sync_status_dialog_titel">Synchronisierung offen</string>
-    <string name="sync_status_kein_offener_sync_detail">Alle lokal gespeicherten Daten wurden bereits an den SQL-Server übertragen.</string>
+    <string name="sync_status_kein_offener_sync_detail">Keine Mengenübertragung offen. Notizen, Kopf und Abschluss bleiben lokal gespeichert und blockieren die Navigation nicht.</string>
     <string name="sync_hauptmenue_blockiert_titel">Hauptmenü noch gesperrt</string>
-    <string name="sync_hauptmenue_blockiert_offline_text">Für diese Zählerliste gibt es noch lokal gespeicherte Änderungen. Solange die Übertragung offen ist, kannst du nicht zurück ins Hauptmenü. Prüfe die Verbindung und versuche die Synchronisierung erneut.</string>
-    <string name="sync_hauptmenue_blockiert_offen_text">Für diese Zählerliste gibt es noch lokal gespeicherte Änderungen. Solange die Übertragung offen ist, kannst du nicht zurück ins Hauptmenü. Du kannst die Synchronisierung jetzt erneut versuchen.</string>
+    <string name="sync_hauptmenue_blockiert_offline_text">Es gibt noch unbestätigte Mengen. Prüfe die Verbindung und versuche den Mengenabgleich erneut.</string>
+    <string name="sync_hauptmenue_blockiert_offen_text">Unbestätigte Mengen oder ungeklärte Mengenaufträge sperren das Hauptmenü. Eine Verbindung allein bestätigt keine Übertragung.</string>
+    <string name="sync_hauptmenue_blockiert_sql_text">Die Mengenübertragung ist in diesem Modus gesperrt. Unbestätigte Mengen bleiben lokal und sperren das Hauptmenü.</string>
     <string name="sync_hauptmenue_dialog_retry">Erneut synchronisieren</string>
+    <string name="sync_uebertragung_deaktiviert">SQL-Übertragung deaktiviert – Synchronisierung derzeit nicht möglich.</string>
+    <string name="sync_diagnose_aktuelles_blatt">Aktuelles Blatt:</string>
+    <string name="sync_diagnose_gesamt">Gesamter lokaler Bestand (maßgeblich für die Rückkehr):</string>
+    <string name="sync_freigabe_voraussetzungen">Mengen benötigen den freigegebenen Mengenabgleich, eine eindeutige Ergebnis- und Durchgangszuordnung und eine bestätigte SQL-Rücklesung. Notizen, Kopf und Abschluss bleiben lokal und blockieren nicht. Diese Diagnose überträgt und quittiert nichts.</string>
     <string name="sync_hauptmenue_dialog_bleiben">Hier bleiben</string>
     <string name="sync_hauptmenue_retry_offen">Synchronisierung ist weiterhin offen. Bitte in der Zählerliste bleiben.</string>
     <string name="sync_hauptmenue_retry_erfolgreich">Synchronisierung erfolgreich. Rückkehr ins Hauptmenü ist wieder möglich.</string>
@@ -186,7 +192,7 @@
     <string name="ungespeichert_dialog_verwerfen">Verwerfen</string>
     <string name="ungespeichert_dialog_abbrechen">Abbrechen</string>
     <string name="abschluss_dialog_titel">Zählung abschließen</string>
-    <string name="abschluss_dialog_text">Soll diese BlattNr jetzt als abgeschlossen markiert werden?</string>
+    <string name="abschluss_dialog_text">Soll diese BlattNr abgeschlossen werden oder offen bleiben? In beiden Fällen wird vor dem Verlassen synchronisiert.</string>
     <string name="abschluss_dialog_ja">Abschließen</string>
     <string name="abschluss_dialog_nein">Noch offen lassen</string>
     <string name="abschluss_dialog_abbrechen">Abbrechen</string>
@@ -215,4 +221,10 @@
     <string name="listenquelle_eintrag_server">SQL-Listenstand · Abschluss lokal</string>
     <string name="listenquelle_nur_blattkopf">Die Blattinformationen sind aktuell. Für dieses Blatt ist noch kein lokaler Artikelbestand verfügbar.</string>
     <string name="lokales_speichern_fehler">Lokal nicht gespeichert. Änderungen bleiben in dieser Ansicht offen. Bitte erneut speichern.</string>
+    <string name="austritt_sync_titel">Änderungen synchronisieren</string>
+    <string name="austritt_sync_speichern">Lokale Speicherung wird abgeschlossen …</string>
+    <string name="austritt_sync_uebertragen">Offene Änderungen werden geprüft und übertragen …</string>
+    <string name="austritt_sync_fehler">Verlassen noch nicht möglich</string>
+    <string name="austritt_sync_wiederholen">Erneut versuchen</string>
+    <string name="austritt_sync_bleiben">Hier bleiben</string>
 </resources>

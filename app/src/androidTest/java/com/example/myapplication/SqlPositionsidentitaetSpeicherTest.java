@@ -45,7 +45,7 @@ public class SqlPositionsidentitaetSpeicherTest {
         speicher.initialisiereArtikel(41,Arrays.asList(dto(701,41,1,null),dto(702,41,2,0)));
         speicher.close(); speicher = new LokalerInventurSpeicher(context,name);
         List<Artikel> artikel = speicher.ladeArtikel(41);
-        assertEquals(11,speicher.getReadableDatabase().getVersion());
+        assertEquals(13,speicher.getReadableDatabase().getVersion());
         assertEquals(Long.valueOf(701),artikel.get(0).getSqlPositionsId());
         assertEquals(Long.valueOf(702),artikel.get(1).getSqlPositionsId());
         assertEquals(Integer.valueOf(41),artikel.get(0).getQuellBlattnummer());

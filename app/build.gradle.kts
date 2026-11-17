@@ -46,6 +46,7 @@ android {
         buildConfigField("String", "SQL_SERVER_SCHEMA", buildConfigString(""))
         buildConfigField("String", "SQL_SERVER_USERNAME", buildConfigString(""))
         buildConfigField("String", "SQL_SERVER_PASSWORD", buildConfigString(""))
+        buildConfigField("boolean", "SQL_EINZELVERSUCH_ERLAUBT", "false")
     }
 
     buildTypes {
@@ -53,6 +54,7 @@ android {
             create("internalSql") {
                 initWith(getByName("debug"))
                 matchingFallbacks += listOf("debug")
+                buildConfigField("boolean", "SQL_EINZELVERSUCH_ERLAUBT", "true")
                 buildConfigField("String", "SQL_SERVER_HOST", buildConfigString(internalSqlProperties.getProperty("sqlServerHost")))
                 val sqlPort = internalSqlProperties.getProperty("sqlServerPort", "1433").toIntOrNull()
                 require(sqlPort != null && sqlPort in 1..65535) { "Lokaler SQL-Port fuer internalSql ungueltig." }
@@ -77,6 +79,10 @@ android {
     }
     buildFeatures {
         buildConfig = true
+    }
+    sourceSets {
+        getByName("test").java.srcDir("src/sqlAdapterTest/java")
+        getByName("androidTest").java.srcDir("src/sqlAdapterTest/java")
     }
 }
 

@@ -56,7 +56,8 @@ public class ArtikelAdapterInstrumentedTest {
     @Test
     public void beideAdapterLesenAenderungenBeiErneuterFilterungUndBenachrichtigen() throws Exception {
         aufHauptthread(() -> {
-            for (RecyclerView.Adapter<?> adapter : adapter(daten())) {
+            for (RecyclerView.Adapter<?> adapter : Arrays.asList(
+                    new ArtikelAdapter(daten(), true, null), new ArtikelAdapterV2(daten(), null))) {
                 int[] meldungen = {0};
                 adapter.registerAdapterDataObserver(new RecyclerView.AdapterDataObserver() {
                     @Override
