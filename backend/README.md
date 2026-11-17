@@ -3,6 +3,273 @@
 Eigenstaendiges Maven-Projekt mit Java 21 und Spring Boot 4.1.1.
 Das Android-Projekt bleibt ein separates Gradle-Projekt.
 
+## Neon-REST-Pruefung ohne OIDC-Anbieter
+
+Die bestehende Anwendung ist ein OAuth2 Resource Server, kein Login-Server.
+Ein OIDC-Anbieter ist noch nicht eingerichtet. Auf ausdruecklichen Wunsch wird
+jetzt keiner eingerichtet. JWT-Konfiguration, SecurityFilterChain und
+Benutzerzuordnung bleiben unveraendert; es gibt keinen Test-Login oder Ersatzdecoder.
+Fuer einen spaeteren echten Login-Test fehlen diese drei Vertrauensparameter:
+
+| Spring-Property | Umgebungsvariable |
+| --- | --- |
+| `inventur.security.jwt.issuer` | `INVENTUR_SECURITY_JWT_ISSUER` |
+| `inventur.security.jwt.audience` | `INVENTUR_SECURITY_JWT_AUDIENCE` |
+| `inventur.security.jwt.jwk-set-uri` | `INVENTUR_SECURITY_JWT_JWK_SET_URI` |
+
+Issuer und JWKS muessen HTTPS verwenden. Der unveraenderte Decoder verlangt
+RS256, einen passenden Issuer und Audience, `typ=JWT` oder `at+jwt`, Ablaufzeit
+und gueltige Claimtypen. Danach muss das exakt passende Paar aus `iss` und `sub`
+einem aktiven `benutzer` mit Rolle `ZAEHLER` zugeordnet sein. Die Listenabfrage
+filtert im bestehenden Repository nach `aktueller_zaehler_id`.
+Die Vertrauensparameter kommen aus dem vorgesehenen Anbieter, nicht aus einem
+ungeprueften Token. Token nur lokal geschuetzt bereitstellen und nicht protokollieren.
+Die isolierten Testdecoder werden nicht fuer den Neon-Live-Test uebernommen.
+
+Ausser den drei Anbieterwerten wird ein gueltiger, vom Anbieter ausgestellter
+Access-Token des Testbenutzers benoetigt. Nach kryptografischer Pruefung muessen
+dessen Issuer und Subject dem lokalen Demo-Benutzer zugeordnet werden.
+Token und Zugangsdaten bleiben in lokaler, ignorierter Konfiguration.
+Ohne Anbieter und diese Zuordnung ist ein authentifizierter HTTP-Live-Test
+bewusst noch nicht moeglich. Die Anmeldung selbst findet spaeter beim Anbieter
+statt; der bestehende Backend-Endpunkt nimmt lediglich Bearer-Tokens entgegen.
+
+Nach Vorschau und ausdruecklicher Nutzerfreigabe angelegter synthetischer Datenbestand:
+
+| Daten | Vorgesehene Werte |
+| --- | --- |
+| Benutzer | `a1711000-0000-4000-8000-000000000001`, Neon REST Demo-Zaehler, aktiv, ZAEHLER |
+| Zugeordnete Liste | `a1712000-0000-4000-8000-000000000001`, `NEON-REST-DEMO-ZUGEORDNET` |
+| Unzugeordnete Kontrollliste | `a1712000-0000-4000-8000-000000000002`, `NEON-REST-DEMO-NICHT-ZUGEORDNET` |
+| Sitzung | Eine offene Sitzung am 17.11.2026, Runde 1, fuer die zugeordnete Liste |
+| Blaetter | `DEMO-01` und `DEMO-02`, beide offen |
+| Artikel | `NEON-DEMO-A01` Fiktiver Kugelstern, `A02` Fiktiver Mondwuerfel, `A03` Fiktiver Sonnenring |
+| Positionen | Vier Positionen an den Demo-Lagerorten DEMO-A und DEMO-B; keine Zaehlergebnisse |
+
+Der lokale Seed verwendete vorhandene Entities und Repositories in einer
+Transaktion. Vor dem Einfuegen waren die betroffenen Tabellen leer.
+Alle 13 neuen Datensaetze wurden erfolgreich gemeinsam committed. Vorhandene
+Daten wurden nicht ueberschrieben, Tabellen und Migrationen nicht ergaenzt.
+Bei ID-/Code-Kollision wuerde der Seed abbrechen. OIDC bleibt bis zur Pruefung
+eines echten Tokens unzugeordnet; dadurch ist der Demo-Benutzer nicht anmeldbar.
+
+Tatsaechliche erneute Pruefung am 17.11.2026: Das echte Spring-Backend startete
+mit Neon-Profil und Read-only-Verbindungen. JDBC-Ziel als Neon geprueft;
+Nach dem Seed lieferten Repository-Abfragen 1 Benutzer, 2 Listen, 1 Sitzung,
+2 Blaetter, 3 Artikel und 4 Positionen. Das bestehende nach Zaehler gefilterte
+Listen-Repository lieferte nur `NEON-REST-DEMO-ZUGEORDNET`; die unzugeordnete
+Kontrollliste blieb im Repository-Ergebnis ausgeschlossen. Das ist ein direkter
+Repository-Test, kein authentifizierter HTTP-Datenabruf.
+
+- `GET /api/v1/health`: 200, `{"status":"UP"}`.
+- Die vier bestehenden GET-Leserouten fuer Listen, Sitzungen, Blaetter und
+  Blattdetails wurden nach dem Seed jeweils ohne Token und mit ungueltigem
+  Token ueber echte HTTP-Aufrufe geprueft: achtmal 401,
+  `{"status":401,"code":"AUTHENTIFIZIERUNG_ERFORDERLICH","detail":"Eine gueltige Anmeldung ist erforderlich."}`.
+- Nach Schliessen ausschliesslich des lokalen Hikari-Pools: Repository wirft
+  `JpaSystemException`; Health liefert weiterhin 200. Das ist ein kontrollierter
+  lokaler Verbindungsverlust, kein herbeigefuehrter Neon-Infrastrukturausfall.
+
+Health ist nach bestehendem Controller und Vertrag ein reiner Liveness-Endpunkt
+ohne Datenbankabfrage. Authentifizierte HTTP-Antworten bei Datenbankausfall
+konnten ohne gueltigen Anbieter-Token noch nicht live geprueft werden.
+Es wurden keine simulierten JWT-Ergebnisse als Neon-Live-Erfolg gewertet.
+
+Erneuter Maven-`package`-Lauf: 562 Tests, keine Fehler, Fehlschlaege oder
+uebersprungenen Tests, BUILD SUCCESS. Isolierte Tests umfassen JWT-Pruefung,
+OIDC-Zuordnung, Listenautorisierung sowie HTTP-Fehler und Rollbacks.
+Lokale ignorierte Protokolle: `target/neon-rest-package.log` und
+`target/neon-rest-readonly.log` fuer die vorherige Pruefung sowie
+`target/neon-rest-seed.log` und `target/neon-rest-without-oidc.log` fuer den
+freigegebenen Seed und die anschliessende Pruefung. Der Pruefserver wurde wieder
+geschlossen. Nachfolgend wurden nur Dokumentation und lokale Pruefprogramme
+angepasst; Anwendungscode und der erfolgreich getestete Build bleiben gleich.
+Auf spaeter verschoben: Anbieter-Konfiguration, gueltiger Access-Token,
+OIDC-Zuordnung und authentifizierte HTTP-Tests einschliesslich fremder Liste
+und Verbindungsverlust. Danach kann die gesonderte Android-REST-Anbindung
+geplant werden. Android und DatenWHF bleiben unveraendert.
+
+## Neon PostgreSQL
+
+Das Profil `neon` verwendet den vorhandenen PostgreSQL-JDBC-Treiber und HikariCP.
+Keine neuen Abhaengigkeiten oder Java-Klassen. Hibernate prueft weiterhin nur
+das Schema (`ddl-auto=validate`), SQL-Initialisierung bleibt ausgeschaltet und
+Flyway-Clean gesperrt. Im Neon-Profil sind automatische Migrationen deaktiviert.
+Ohne passendes Schema scheitert der Start an der Validierung.
+
+Verknuepft ist das bestehende Projekt `inventur-app` (`long-smoke-08321858`) in
+`org-little-block-70543925`, Branch `production` (`br-falling-recipe-b9ij12tk`).
+Die lokale `.neon`-Datei ist ignoriert. `neon.ts`, `package.json` und Lockdatei
+dienen ausschliesslich der Neon-CLI, nicht dem Java-Backend-Build. Das Setup wurde
+mit `--services postgres --no-agent-setup` ausgefuehrt. `neon config plan` meldet
+keine Aenderungen; ein Deploy ist nicht erforderlich und wurde nicht ausgefuehrt.
+
+Die CLI hat `backend/.env.local` angelegt. Deren PostgreSQL-Verbindungen wurden
+lokal in `backend/application-neon.local.properties` uebertragen: gepoolte
+JDBC-URL fuer die Anwendung, direkte JDBC-URL fuer Flyway, jeweils getrennte
+Benutzer-/Passwort-Properties. Beide Dateien sind ignoriert. Das Neon-Profil
+importiert die lokale Spring-Datei automatisch, wenn der Start im Ordner
+`backend` erfolgt. Bei Zugangsdatenwechsel die lokale Spring-Datei aktualisieren;
+Spring Boot liest `.env.local` selbst nicht ein.
+
+Start mit der vorhandenen lokalen Spring-Konfiguration, nach Schemafreigabe:
+
+```powershell
+cd backend
+$env:JAVA_HOME = 'C:\Program Files\Android\Android Studio\jbr'
+$env:SPRING_PROFILES_ACTIVE = 'neon'
+.\mvnw.cmd '-Dmaven.repo.local=.cache/repository' spring-boot:run
+```
+
+Falls auf diesem Windows-Rechner erneut das bekannte Maven-Zertifikatsproblem
+auftritt, den weiter unten dokumentierten lokalen Truststore verwenden.
+Fuer Neon-CLI-Aufrufe ist hier `$env:NODE_USE_SYSTEM_CA = '1'` erforderlich,
+damit Node den Windows-Zertifikatsspeicher verwendet. TLS-Pruefung bleibt aktiv.
+
+Alternative ohne lokale Datei: Variablen bereitstellen (Platzhalter ersetzen):
+
+```powershell
+cd backend
+$env:SPRING_PROFILES_ACTIVE = 'neon'
+$env:NEON_HOST = '<Neon-Host aus dem Connect-Dialog, optional mit -pooler>'
+$env:NEON_DATABASE = '<Neon-Datenbankname>'
+$env:SPRING_DATASOURCE_USERNAME = '<Neon-Rolle>'
+$neonSecret = Read-Host 'Neon-Passwort' -AsSecureString
+$env:SPRING_DATASOURCE_PASSWORD = [System.Net.NetworkCredential]::new('', $neonSecret).Password
+$env:JAVA_HOME = 'C:\Program Files\Android\Android Studio\jbr'
+.\mvnw.cmd '-Dmaven.repo.local=.cache/repository' spring-boot:run
+```
+
+Nach dem Stoppen `Remove-Item Env:SPRING_DATASOURCE_PASSWORD` ausfuehren.
+Die URL wird zu `jdbc:postgresql://<Host>:5432/<Datenbank>?sslmode=require`.
+Alternativ hat die bisherige Variable `SPRING_DATASOURCE_URL` Vorrang; eine dort
+gesetzte vollstaendige JDBC-URL muss selbst `sslmode=require` oder strenger
+enthalten. Keine `postgresql://`-URL und keine Zugangsdaten in der URL verwenden.
+
+Die lokale Spring-Datei wird durch die bestehende Git-Regel `*.local.properties`
+ausgeschlossen. Keine Zugangsdaten in versionierte Properties schreiben.
+
+Fuer den Anwendungsbetrieb kann der gepoolte Neon-Host mit `-pooler` verwendet
+werden. Fuer spaeter freigegebene Migrationen die direkte Verbindung ueber die
+bestehenden Spring-Variablen konfigurieren:
+
+- `SPRING_FLYWAY_URL=jdbc:postgresql://<direkter Host>:5432/<Datenbank>?sslmode=require`
+- `SPRING_FLYWAY_USER=<Neon-Rolle>`
+- `SPRING_FLYWAY_PASSWORD`: lokal geschuetzt bereitstellen wie das Datasource-Passwort.
+
+Beide URLs muessen dieselbe Neon-Branch und Datenbank adressieren.
+`scripts/start-dev.ps1` startet weiterhin ausdruecklich die lokale
+Entwicklungsdatenbank; fuer Neon den obigen Start verwenden.
+JWT-Konfiguration und REST-Vertraege bleiben unveraendert.
+
+### Zuerst nur lesend pruefen
+
+Vor dem ersten Backend-Start ueber die direkte Verbindung mit einem SQL-Client
+pruefen. Keine Seeds oder Migrationen ausfuehren:
+
+```sql
+BEGIN READ ONLY;
+SELECT current_database(), current_user;
+SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid();
+SELECT table_schema, table_name FROM information_schema.tables
+WHERE table_type = 'BASE TABLE'
+  AND table_schema NOT IN ('pg_catalog', 'information_schema')
+ORDER BY table_schema, table_name;
+SELECT table_schema, table_name, column_name, data_type, is_nullable
+FROM information_schema.columns
+WHERE table_schema = 'public'
+ORDER BY table_name, ordinal_position;
+SELECT to_regclass('public.flyway_schema_history');
+-- Nur wenn die Historientabelle vorhanden ist:
+SELECT installed_rank, version, description, checksum, success
+FROM public.flyway_schema_history ORDER BY installed_rank;
+ROLLBACK;
+```
+
+`pg_stat_ssl` beschreibt den serverseitigen Verbindungsabschnitt. Bei der
+Pruefung meldete dieser `false`, waehrend am JDBC-Socket fuer direkte und
+gepoolte Verbindung TLS 1.3 mit `TLS_AES_256_GCM_SHA384` nachgewiesen wurde.
+Den Client-TLS-Status daher nicht allein aus dieser SQL-Ansicht ableiten.
+
+Historie und Pruefsummen mit V1 bis V9 unter `src/main/resources/db/migration`
+vergleichen. Bei abweichender Historie oder vorhandenen Tabellen ohne Historie
+abbrechen; kein automatisches Baseline, Repair oder Clean. Ausstehende
+Migrationen zuerst konkret vorlegen:
+
+| Migration | Vorgesehene Schemaaenderung |
+| --- | --- |
+| V1 | Tabelle `zaehlerliste` |
+| V2 | Tabelle `benutzer`, Zuweisungsfelder an `zaehlerliste` |
+| V3 | Tabelle `zaehlsitzung`, eindeutiger Index fuer offene Sitzungen |
+| V4 | Tabelle `zaehlblatt` |
+| V5 | Tabellen `artikel` und `zaehlposition` |
+| V6 | Tabelle `zaehlergebnis` |
+| V7 | Tabellen `sync_request` und `ergebnis_historie`, Constraints an Sitzung, Blatt und Position |
+| V8 | OIDC-Felder und Constraints an `benutzer`, keine automatische Kontoverknuepfung |
+| V9 | Tabellen `zuweisung_historie` und `sync_konflikt`, Constraint an `sync_request`, Konfliktindex |
+
+Erst nach ausdruecklicher Freigabe der tatsaechlich fehlenden Aenderungen darf
+Flyway fuer diesen Lauf mit `SPRING_FLYWAY_ENABLED=true` aktiviert werden.
+Danach die Variable wieder entfernen. Die Migrationen selbst bleiben unveraendert.
+
+Beim ersten lesenden Backend-Test zusaetzlich
+`SPRING_DATASOURCE_HIKARI_READ_ONLY=true` setzen und nur GET-Aufrufe ausfuehren.
+Vor regulaerem Schreibbetrieb die Variable entfernen. Pruefen:
+`GET /api/v1/health` (200, `{"status":"UP"}`), Listen, Sitzungen, Blaetter und
+Blattdetails mit gueltiger bestehender JWT-/Benutzerzuordnung. Ohne JWT liefern
+geschuetzte Endpunkte 401. Health bestaetigt nur die HTTP-Erreichbarkeit;
+Schema-Validierung und Repository-Abfragen pruefen die Datenbank.
+Keine Test-Seeds oder PUT-Aufrufe gegen die ungepruefte Neon-Datenbank.
+
+### Tests bleiben isoliert
+
+Die Integrationstests beziehen PostgreSQL ueber `@ServiceConnection` aus eigenen
+Testcontainern. Maven-Tests ohne Neon-Profil, externe Konfigurationsdateien oder
+Datasource-/Flyway-Zugangsdaten starten. Insbesondere `SPRING_PROFILES_ACTIVE`,
+`SPRING_CONFIG_ADDITIONAL_LOCATION` und etwaige `SPRING_FLYWAY_*`-Variablen im
+Testterminal entfernen. Migrationen und Schreibtests bleiben auf temporaere
+Datenbanken beschraenkt. Die bisherigen Testbefehle stehen weiter unten.
+
+Grundlage: [Neon-Verbindungspooling](https://neon.com/docs/connect/connection-pooling)
+und [Verbindungen aus Anwendungen](https://neon.com/docs/connect/connect-from-any-app).
+
+Pruefung am 17.11.2026: Alle 562 Backend-Tests bestanden, keine Fehler oder
+uebersprungenen Tests. Zusaetzlich bestanden die 20 `PostgresIntegrationTests`
+mit aktivem Neon-Profil und ausschliesslich fuer den Testlauf aktiviertem Flyway;
+`@ServiceConnection` ersetzte die URL durch den isolierten Testcontainer.
+Protokolle: `target/neon-tests.log` und `target/neon-profile-tests.log` (ignoriert).
+Die echte Neon-Verbindung wurde anschliessend direkt und gepoolt lesend geprueft:
+Anmeldung und TLS 1.3 erfolgreich, `transaction_read_only=on`. PostgreSQL 18;
+zunaechst keine Anwendungstabellen und keine `flyway_schema_history` vorhanden.
+Nach ausdruecklicher Nutzerfreigabe wurden die unveraenderten V1 bis V9 ueber
+die direkte Verbindung erfolgreich ausgefuehrt. Vorhanden sind jetzt alle elf
+Anwendungstabellen aus der obigen Migrationstabelle und `flyway_schema_history`.
+Die Historie weist V1 bis V9 erfolgreich aus; keine weiteren Migrationen offen.
+Keine Demo-Daten wurden angelegt.
+
+`mvnw.cmd package` einschliesslich aller 562 Tests: BUILD SUCCESS, keine Fehler
+oder uebersprungenen Tests. Anschliessende Paketierung der finalen Profil- und
+Logging-Einstellungen ohne erneuten Testlauf ebenfalls erfolgreich.
+Das echte Backend startete gegen Neon; Hibernate-Schemavalidierung erfolgreich.
+Tatsaechlich per HTTP geprueft: Health 200 mit `{"status":"UP"}`, Listen,
+Sitzungen, Blaetter und Blattdetails ohne JWT jeweils 401.
+Eine fachlich authentifizierte HTTP-Abfrage bleibt offen: Es fehlen eine
+konfigurierte vertrauenswuerdige JWT-Quelle und zugeordnete Benutzerkonten.
+Die bestehende Zugriffskontrolle wurde nicht umgangen.
+
+Zusaetzlicher lesender Spring-Smoke-Test gegen Neon: vorhandene Repository-Beans
+fuer Listen, Sitzungen, Blaetter und Positionen liefern jeweils leere Ergebnisse.
+Bei absichtlich geschlossenem lokalen Hikari-Pool meldet das Listen-Repository
+`JpaSystemException`; Health bleibt 200. Das prueft den lokalen
+Verbindungsverlust, keinen Ausfall der Neon-Infrastruktur und keinen
+authentifizierten HTTP-Datenabruf bei Datenbankausfall.
+Die vorhandenen isolierten HTTP-Tests fuer technische Schreibfehler/503 und
+Rollback sind bestanden. Schreibende HTTP-Tests wurden nicht auf Neon ausgefuehrt.
+Pruefserver anschliessend gestoppt; das Neon-Profil laesst Flyway standardmaessig
+weiterhin deaktiviert. Weitere lokale Protokolle: `target/neon-package.log`,
+`target/neon-config-plan.log`, `target/neon-readonly.log`,
+`target/neon-migration-start.log` und `target/neon-backend-smoke.log`.
+
 ## Aktueller Stand: Lernschritt 32 – REST-Endpunkt fuer Zaehlblattabschluss
 
 ### Endpunkt und Vertrag
